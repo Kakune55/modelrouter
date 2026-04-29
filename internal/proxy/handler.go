@@ -76,6 +76,10 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	snap := h.store.Get()
 	route, err := snap.Pick(modelName, clientIP(r))
 	if err != nil {
+		if errors.Is(err, router.ErrNoAvailableEndpoint) {
+			writeOpenAIError(w, http.StatusServiceUnavailable, err.Error(), "upstream_unavailable")
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "model_not_found")
 		return
 	}
@@ -104,6 +108,9 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
+		if responseStats.ResponseStarted {
+			return
+		}
 		if errors.Is(err, errEndpointConcurrencyLimited) {
 			writeOpenAIError(w, http.StatusTooManyRequests, err.Error(), "rate_limit_exceeded")
 			return
@@ -116,11 +123,23 @@ type responseStats struct {
 	Streaming          bool
 	TTFT               time.Duration
 	GenerationDuration time.Duration
+	ResponseStarted    bool
+}
+
+type upstreamResponse struct {
+	StatusCode int
+	Header     http.Header
+	Body       []byte
+	Usage      usageInfo
+	BytesOut   int64
+	Stats      responseStats
 }
 
 func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, features config.FeaturesConfig, route *router.Route) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
 	endpoints := route.Candidates()
 	var lastErr error
+	var lastResponse *upstreamResponse
+	var lastEndpoint config.EndpointConfig
 	limited := false
 	for _, endpoint := range endpoints {
 		if !route.TryAcquire(endpoint.Name) {
@@ -132,19 +151,40 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			route.Release(endpoint.Name)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
 		}
-		status, usage, bytesOut, stats, err := h.forward(w, r, upstreamBody, timeout, endpoint)
+		resp, err := h.forward(w, r, upstreamBody, timeout, endpoint)
 		route.Release(endpoint.Name)
 		if err != nil {
 			route.MarkFailure(endpoint.Name)
+			if resp != nil && resp.Stats.ResponseStarted {
+				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, err
+			}
 			lastErr = err
 			continue
 		}
-		if endpointFailureStatus(status) {
+		if endpointFailureStatus(resp.StatusCode) {
 			route.MarkFailure(endpoint.Name)
+			if resp.Stats.ResponseStarted {
+				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, nil
+			}
+			lastResponse = resp
+			lastEndpoint = endpoint
+			continue
 		} else {
 			route.MarkSuccess(endpoint.Name)
 		}
-		return status, usage, bytesOut, endpoint, stats, nil
+		if !resp.Stats.ResponseStarted {
+			bytesOut, err := writeBufferedResponse(w, resp)
+			resp.BytesOut = bytesOut
+			if err != nil {
+				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, err
+			}
+		}
+		return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, nil
+	}
+	if lastResponse != nil {
+		bytesOut, err := writeBufferedResponse(w, lastResponse)
+		lastResponse.BytesOut = bytesOut
+		return lastResponse.StatusCode, lastResponse.Usage, lastResponse.BytesOut, lastEndpoint, lastResponse.Stats, err
 	}
 	if lastErr == nil {
 		if limited {
@@ -169,7 +209,7 @@ func upstreamModel(route *router.Route, endpoint config.EndpointConfig) string {
 	return route.Model
 }
 
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig) (int, usageInfo, int64, responseStats, error) {
+func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig) (*upstreamResponse, error) {
 	started := time.Now()
 	ctx := r.Context()
 	if timeout > 0 {
@@ -181,7 +221,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 	upstreamURL := strings.TrimRight(endpoint.BaseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
-		return http.StatusBadGateway, usageInfo{}, 0, responseStats{}, err
+		return nil, err
 	}
 	copyRequestHeaders(req.Header, r.Header)
 	if endpoint.APIKey != "" {
@@ -191,27 +231,45 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return http.StatusBadGateway, usageInfo{}, 0, responseStats{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	copyResponseHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-
 	if isStreamResponse(resp.Header) {
+		copyResponseHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
 		n, stats, err := copyStreaming(w, resp.Body, started)
-		return resp.StatusCode, stats.Usage, n, responseStats{Streaming: true, TTFT: stats.TTFT, GenerationDuration: stats.GenerationDuration}, err
+		return &upstreamResponse{
+			StatusCode: resp.StatusCode,
+			Usage:      stats.Usage,
+			BytesOut:   n,
+			Stats: responseStats{
+				Streaming:          true,
+				TTFT:               stats.TTFT,
+				GenerationDuration: stats.GenerationDuration,
+				ResponseStarted:    true,
+			},
+		}, err
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return resp.StatusCode, usageInfo{}, 0, responseStats{}, err
+		return &upstreamResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, err
 	}
-	n, writeErr := w.Write(respBody)
-	if writeErr != nil {
-		return resp.StatusCode, usageInfo{}, int64(n), responseStats{}, writeErr
-	}
-	return resp.StatusCode, parseUsage(respBody), int64(n), responseStats{}, nil
+	return &upstreamResponse{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header.Clone(),
+		Body:       respBody,
+		Usage:      parseUsage(respBody),
+		Stats:      responseStats{},
+	}, nil
+}
+
+func writeBufferedResponse(w http.ResponseWriter, resp *upstreamResponse) (int64, error) {
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	n, err := w.Write(resp.Body)
+	return int64(n), err
 }
 
 func readModel(body []byte) (string, error) {

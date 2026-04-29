@@ -285,6 +285,55 @@ func TestChatCompletionsSkipsEndpointAtMaxConcurrency(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
+	firstCalled := false
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"upstream failed"}}`))
+	}))
+	defer first.Close()
+
+	secondCalled := false
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer second.Close()
+
+	store := router.NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "first", BaseURL: first.URL},
+					{Name: "second", BaseURL: second.URL},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	if !firstCalled || !secondCalled {
+		t.Fatalf("firstCalled=%v secondCalled=%v", firstCalled, secondCalled)
+	}
+	if strings.Contains(rr.Body.String(), "upstream failed") {
+		t.Fatalf("response should come from fallback endpoint: %s", rr.Body.String())
+	}
+}
+
 func TestChatCompletionsCapturesStreamingUsage(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)

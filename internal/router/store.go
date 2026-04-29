@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -8,6 +9,8 @@ import (
 
 	"modelrouter/internal/config"
 )
+
+var ErrNoAvailableEndpoint = errors.New("route group has no available endpoint")
 
 type Store struct {
 	current atomic.Value
@@ -105,13 +108,11 @@ func (s *Snapshot) Pick(modelName string, clientIP string) (*Route, error) {
 		return nil, fmt.Errorf("route group not found: %s", model.RouteGroup)
 	}
 	candidates := make([]config.EndpointConfig, 0, len(group.endpoints))
-	candidateIDs := make([]int, 0, len(group.endpoints))
 	for _, idx := range group.balancer.Order(clientIP) {
 		if group.isCooling(idx, time.Now()) {
 			continue
 		}
 		candidates = append(candidates, group.endpoints[idx])
-		candidateIDs = append(candidateIDs, idx)
 	}
 	if len(candidates) > 0 {
 		return &Route{
@@ -120,13 +121,11 @@ func (s *Snapshot) Pick(modelName string, clientIP string) (*Route, error) {
 			Group:         group.Name,
 			Strategy:      group.Config.Strategy,
 			Endpoint:      candidates[0],
-			EndpointID:    candidateIDs[0],
 			candidates:    candidates,
-			candidateIDs:  candidateIDs,
 			group:         group,
 		}, nil
 	}
-	return nil, fmt.Errorf("route group has no available endpoint: %s", model.RouteGroup)
+	return nil, fmt.Errorf("%w: %s", ErrNoAvailableEndpoint, model.RouteGroup)
 }
 
 type Route struct {
@@ -135,9 +134,7 @@ type Route struct {
 	Group         string
 	Strategy      string
 	Endpoint      config.EndpointConfig
-	EndpointID    int
 	candidates    []config.EndpointConfig
-	candidateIDs  []int
 	group         *GroupRuntime
 }
 

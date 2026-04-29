@@ -147,7 +147,7 @@ func NewRecorder() *Recorder {
 
 func (r *Recorder) Record(ev Event) {
 	now := time.Now()
-	success := ev.Err == nil && ev.StatusCode >= 200 && ev.StatusCode < 500
+	success := ev.Err == nil && ev.StatusCode >= 200 && ev.StatusCode < 400
 	key := ev.Client + "\x00" + ev.Model + "\x00" + ev.RouteGroup + "\x00" + ev.Endpoint
 	shard := r.shardFor(key)
 	shard.mu.Lock()
