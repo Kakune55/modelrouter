@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,9 +34,12 @@ func (h *Handler) WithClientLimitProvider(provider ClientLimitProvider) *Handler
 }
 
 func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, h.store.Get().Config)
+		writeJSON(w, http.StatusOK, redactedConfig(h.store.Get().Config))
 	case http.MethodPut:
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
 		if err != nil {
@@ -55,6 +59,9 @@ func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -69,6 +76,9 @@ func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -84,6 +94,9 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -92,6 +105,9 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Limits(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -100,6 +116,9 @@ func (h *Handler) Limits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -152,6 +171,68 @@ type metricsQuery struct {
 	Endpoint   string `json:"endpoint,omitempty"`
 	Limit      int    `json:"limit"`
 	Offset     int    `json:"offset"`
+}
+
+func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) bool {
+	token := strings.TrimSpace(h.store.Get().Config.Admin.Token)
+	if token == "" {
+		return true
+	}
+	got, ok := bearerToken(r.Header.Get("Authorization"))
+	if ok && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1 {
+		return true
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer realm="modelrouter-admin"`)
+	writeAdminError(w, http.StatusUnauthorized, "invalid or missing admin token")
+	return false
+}
+
+func bearerToken(header string) (string, bool) {
+	if strings.TrimSpace(header) == "" {
+		return "", false
+	}
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || strings.TrimSpace(parts[1]) == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func redactedConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+	clone := *cfg
+	if clone.Admin.Token != "" {
+		clone.Admin.Token = "********"
+	}
+	clone.Auth.Keys = append([]config.ClientKeyConfig(nil), cfg.Auth.Keys...)
+	for i := range clone.Auth.Keys {
+		if clone.Auth.Keys[i].Key != "" {
+			clone.Auth.Keys[i].Key = "********"
+		}
+	}
+	clone.Models = make(map[string]config.ModelConfig, len(cfg.Models))
+	for key, value := range cfg.Models {
+		clone.Models[key] = value
+	}
+	clone.AccessGroups = make(map[string]config.AccessGroupConfig, len(cfg.AccessGroups))
+	for key, value := range cfg.AccessGroups {
+		value.AllowedModels = append([]string(nil), value.AllowedModels...)
+		value.BlockedModels = append([]string(nil), value.BlockedModels...)
+		clone.AccessGroups[key] = value
+	}
+	clone.RouteGroups = make(map[string]config.RouteGroupConfig, len(cfg.RouteGroups))
+	for key, value := range cfg.RouteGroups {
+		value.Endpoints = append([]config.EndpointConfig(nil), value.Endpoints...)
+		for i := range value.Endpoints {
+			if value.Endpoints[i].APIKey != "" {
+				value.Endpoints[i].APIKey = "********"
+			}
+		}
+		clone.RouteGroups[key] = value
+	}
+	return &clone
 }
 
 func metricsQueryFromRequest(r *http.Request) metricsQuery {

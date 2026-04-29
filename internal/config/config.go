@@ -20,6 +20,7 @@ type Config struct {
 	Models       map[string]ModelConfig       `json:"models"`
 	RouteGroups  map[string]RouteGroupConfig  `json:"route_groups"`
 	HTTP         HTTPConfig                   `json:"http,omitempty"`
+	Admin        AdminConfig                  `json:"admin,omitempty"`
 	Auth         AuthConfig                   `json:"auth,omitempty"`
 	AccessGroups map[string]AccessGroupConfig `json:"access_groups,omitempty"`
 	Features     FeaturesConfig               `json:"features,omitempty"`
@@ -27,6 +28,10 @@ type Config struct {
 
 type HTTPConfig struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+type AdminConfig struct {
+	Token string `json:"token,omitempty"`
 }
 
 type FeaturesConfig struct {
