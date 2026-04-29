@@ -38,7 +38,24 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
     "timeout_seconds": 120
   },
   "admin": {
-    "token": "mr-replace-with-admin-token"
+    "token": "mr-replace-with-admin-token",
+    "keys": [
+      {
+        "name": "dashboard",
+        "key": "mr-replace-with-dashboard-token",
+        "permissions": [
+          "admin:read"
+        ]
+      },
+      {
+        "name": "config-manager",
+        "key": "mr-replace-with-config-manager-token",
+        "permissions": [
+          "config:read",
+          "config:write"
+        ]
+      }
+    ]
   },
   "features": {
     "auto_include_stream_usage": true
@@ -106,7 +123,10 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 配置说明：
 
 - `models`: 对外暴露的模型名。客户端请求使用这里的 key。
-- `admin.token`: Admin API 使用的 Bearer token。为空时不校验 Admin API，生产环境不建议留空。
+- `admin.token`: Admin API 的全权限 Bearer token。为空且未配置 `admin.keys` 时不校验 Admin API，生产环境不建议留空。
+- `admin.keys[].name`: Admin key 名称，用于区分 WebUI、脚本或运维用户。
+- `admin.keys[].key`: Admin API 使用的 Bearer token。
+- `admin.keys[].permissions`: 当前 Admin key 拥有的权限列表。
 - `features.auto_include_stream_usage`: 当请求为 `stream: true` 时，自动向上游注入 `stream_options.include_usage=true`，便于统计流式 token。
 - `auth.enabled`: 是否启用客户端 Bearer token 鉴权。
 - `auth.keys[].name`: 客户端名称，用于统计维度和限流状态展示。
@@ -228,7 +248,7 @@ Authorization: Bearer <token>
 - `blocked_models` 命中时会拒绝访问，即使该模型也命中了 `allowed_models`。
 - 命中 client 级限流时返回 `429 rate_limit_exceeded`。
 - `/v1/models` 只返回当前 token 允许访问的模型。
-- `/admin/*` 使用独立的 `admin.token` 鉴权，不复用客户端 token。
+- `/admin/*` 使用独立的 Admin token 鉴权，不复用客户端 token。
 
 模型访问模式支持：
 
@@ -287,6 +307,22 @@ Authorization: Bearer <token>
 这个限制只在进程内生效。多实例部署时，每个实例会分别维护自己的并发计数。
 
 ## Admin API
+
+Admin API 支持两种鉴权方式：
+
+- `admin.token`: 一个简单的全权限 token，适合本地或单人部署。
+- `admin.keys[]`: 多个具名 token，每个 token 可以配置权限，适合 WebUI 或多人协作。
+
+权限说明：
+
+- `admin:*`: 全权限。
+- `admin:read`: 所有只读接口，包括配置读取、指标、健康状态和限流状态。
+- `admin:write`: 写接口，目前等价于配置更新和 reload。
+- `config:read`: `GET /admin/config`。
+- `config:write`: `PUT /admin/config`、`POST /admin/reload`。
+- `metrics:read`: `/admin/metrics` 和子路径。
+- `health:read`: `/admin/health`。
+- `limits:read`: `/admin/limits`。
 
 查看当前配置：
 
