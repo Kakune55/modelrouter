@@ -18,19 +18,25 @@ import (
 var errEndpointConcurrencyLimited = errors.New("all candidate endpoints are at max concurrency")
 
 type Handler struct {
-	store    *router.Store
-	recorder *metrics.Recorder
-	client   *http.Client
+	store         *router.Store
+	recorder      *metrics.Recorder
+	client        *http.Client
+	clientLimiter *clientLimiter
 }
 
 func NewHandler(store *router.Store, recorder *metrics.Recorder) *Handler {
 	return &Handler{
-		store:    store,
-		recorder: recorder,
+		store:         store,
+		recorder:      recorder,
+		clientLimiter: newClientLimiter(),
 		client: &http.Client{
 			Timeout: 0,
 		},
 	}
+}
+
+func (h *Handler) ClientLimitStatus() any {
+	return h.clientLimiter.status(h.store.Get().Config, time.Now())
 }
 
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +65,13 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusForbidden, "model is not allowed for this API key", "model_not_allowed")
 		return
 	}
+	limit := h.store.Get().Config.AccessGroups[client.AccessGroup].RateLimit
+	decision := h.clientLimiter.acquire(client.Name, limit, time.Now())
+	if !decision.Allowed {
+		writeOpenAIError(w, http.StatusTooManyRequests, decision.Reason, "rate_limit_exceeded")
+		return
+	}
+	defer h.clientLimiter.release(client.Name)
 
 	snap := h.store.Get()
 	route, err := snap.Pick(modelName, clientIP(r))

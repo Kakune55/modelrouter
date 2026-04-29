@@ -17,12 +17,12 @@ const (
 )
 
 type Config struct {
-	Models      map[string]ModelConfig      `json:"models"`
-	RouteGroups map[string]RouteGroupConfig `json:"route_groups"`
-	HTTP        HTTPConfig                  `json:"http,omitempty"`
-	Auth        AuthConfig                  `json:"auth,omitempty"`
-	Access      map[string]AccessConfig     `json:"access,omitempty"`
-	Features    FeaturesConfig              `json:"features,omitempty"`
+	Models       map[string]ModelConfig       `json:"models"`
+	RouteGroups  map[string]RouteGroupConfig  `json:"route_groups"`
+	HTTP         HTTPConfig                   `json:"http,omitempty"`
+	Auth         AuthConfig                   `json:"auth,omitempty"`
+	AccessGroups map[string]AccessGroupConfig `json:"access_groups,omitempty"`
+	Features     FeaturesConfig               `json:"features,omitempty"`
 }
 
 type HTTPConfig struct {
@@ -39,13 +39,20 @@ type AuthConfig struct {
 }
 
 type ClientKeyConfig struct {
-	Name string `json:"name"`
-	Key  string `json:"key"`
+	Name        string `json:"name"`
+	Key         string `json:"key"`
+	AccessGroup string `json:"access_group"`
 }
 
-type AccessConfig struct {
-	AllowedModels []string `json:"allowed_models,omitempty"`
-	BlockedModels []string `json:"blocked_models,omitempty"`
+type AccessGroupConfig struct {
+	AllowedModels []string        `json:"allowed_models,omitempty"`
+	BlockedModels []string        `json:"blocked_models,omitempty"`
+	RateLimit     RateLimitConfig `json:"rate_limit,omitempty"`
+}
+
+type RateLimitConfig struct {
+	MaxConcurrency    int `json:"max_concurrency,omitempty"`
+	RequestsPerMinute int `json:"requests_per_minute,omitempty"`
 }
 
 type ModelConfig struct {
@@ -176,6 +183,9 @@ func (c *Config) validateAuth() error {
 	if len(c.Auth.Keys) == 0 {
 		return errors.New("auth.keys must not be empty when auth is enabled")
 	}
+	if len(c.AccessGroups) == 0 {
+		return errors.New("access_groups must not be empty when auth is enabled")
+	}
 	names := map[string]struct{}{}
 	keys := map[string]struct{}{}
 	for i, key := range c.Auth.Keys {
@@ -184,6 +194,12 @@ func (c *Config) validateAuth() error {
 		}
 		if strings.TrimSpace(key.Key) == "" {
 			return fmt.Errorf("auth.keys[%d].key must not be empty", i)
+		}
+		if strings.TrimSpace(key.AccessGroup) == "" {
+			return fmt.Errorf("auth.keys[%d].access_group must not be empty", i)
+		}
+		if _, ok := c.AccessGroups[key.AccessGroup]; !ok {
+			return fmt.Errorf("auth key %q references missing access_group %q", key.Name, key.AccessGroup)
 		}
 		if _, ok := names[key.Name]; ok {
 			return fmt.Errorf("auth key name %q is duplicated", key.Name)
@@ -194,22 +210,25 @@ func (c *Config) validateAuth() error {
 		}
 		keys[key.Key] = struct{}{}
 	}
-	for name, access := range c.Access {
+	for name, access := range c.AccessGroups {
 		if strings.TrimSpace(name) == "" {
-			return errors.New("access client name must not be empty")
-		}
-		if _, ok := names[name]; !ok {
-			return fmt.Errorf("access entry %q does not match any auth key name", name)
+			return errors.New("access group name must not be empty")
 		}
 		for _, model := range access.AllowedModels {
 			if strings.TrimSpace(model) == "" {
-				return fmt.Errorf("access entry %q has empty allowed model", name)
+				return fmt.Errorf("access group %q has empty allowed model", name)
 			}
 		}
 		for _, model := range access.BlockedModels {
 			if strings.TrimSpace(model) == "" {
-				return fmt.Errorf("access entry %q has empty blocked model", name)
+				return fmt.Errorf("access group %q has empty blocked model", name)
 			}
+		}
+		if access.RateLimit.MaxConcurrency < 0 {
+			return fmt.Errorf("access group %q rate_limit.max_concurrency must not be negative", name)
+		}
+		if access.RateLimit.RequestsPerMinute < 0 {
+			return fmt.Errorf("access group %q rate_limit.requests_per_minute must not be negative", name)
 		}
 	}
 	return nil

@@ -30,7 +30,7 @@ func main() {
 	store := router.NewStore(cfg)
 	recorder := metrics.NewRecorder()
 	proxyHandler := proxy.NewHandler(store, recorder)
-	adminHandler := admin.NewHandler(store, recorder, *configPath)
+	adminHandler := admin.NewHandler(store, recorder, *configPath).WithClientLimitProvider(proxyHandler)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", proxyHandler.Models)
@@ -39,6 +39,7 @@ func main() {
 	mux.HandleFunc("/admin/reload", adminHandler.Reload)
 	mux.HandleFunc("/admin/overview", adminHandler.Overview)
 	mux.HandleFunc("/admin/health", adminHandler.Health)
+	mux.HandleFunc("/admin/limits", adminHandler.Limits)
 	mux.HandleFunc("/admin/metrics", adminHandler.Metrics)
 	mux.HandleFunc("/admin/metrics/", adminHandler.Metrics)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

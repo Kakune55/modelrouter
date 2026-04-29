@@ -45,18 +45,23 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
     "keys": [
       {
         "name": "default-client",
-        "key": "mr-replace-with-client-token"
+        "key": "mr-replace-with-client-token",
+        "access_group": "default-access"
       }
     ]
   },
-  "access": {
-    "default-client": {
+  "access_groups": {
+    "default-access": {
       "allowed_models": [
         "public-*"
       ],
       "blocked_models": [
         "*-disabled"
-      ]
+      ],
+      "rate_limit": {
+        "max_concurrency": 8,
+        "requests_per_minute": 120
+      }
     }
   },
   "models": {
@@ -100,10 +105,13 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 - `models`: 对外暴露的模型名。客户端请求使用这里的 key。
 - `features.auto_include_stream_usage`: 当请求为 `stream: true` 时，自动向上游注入 `stream_options.include_usage=true`，便于统计流式 token。
 - `auth.enabled`: 是否启用客户端 Bearer token 鉴权。
-- `auth.keys[].name`: 客户端名称，用来关联 `access` 权限和统计维度。
+- `auth.keys[].name`: 客户端名称，用于统计维度和限流状态展示。
 - `auth.keys[].key`: 客户端请求 `/v1/*` 时使用的 API token。
-- `access.<client>.allowed_models`: 当前客户端允许访问的模型模式列表。为空表示默认允许全部模型。
-- `access.<client>.blocked_models`: 当前客户端禁止访问的模型模式列表。黑名单优先级高于白名单。
+- `auth.keys[].access_group`: 当前 key 使用的访问权限组。
+- `access_groups.<group>.allowed_models`: 当前权限组允许访问的模型模式列表。为空表示默认允许全部模型。
+- `access_groups.<group>.blocked_models`: 当前权限组禁止访问的模型模式列表。黑名单优先级高于白名单。
+- `access_groups.<group>.rate_limit.max_concurrency`: 使用该权限组的每个客户端最大并发请求数。小于等于 `0` 表示不限制。
+- `access_groups.<group>.rate_limit.requests_per_minute`: 使用该权限组的每个客户端每分钟最大请求数。小于等于 `0` 表示不限制。
 - `route_group`: 公开模型名对应的路由组。
 - `route_groups`: 上游 endpoint 组。
 - `strategy`: 负载均衡策略。
@@ -159,14 +167,50 @@ Authorization: Bearer <token>
     "keys": [
       {
         "name": "default-client",
-        "key": "mr-replace-with-client-token"
+        "key": "mr-replace-with-client-token",
+        "access_group": "default-access"
       }
     ]
   },
-  "access": {
-    "default-client": {
+  "access_groups": {
+    "default-access": {
       "allowed_models": ["public-*"],
-      "blocked_models": ["*-disabled"]
+      "blocked_models": ["*-disabled"],
+      "rate_limit": {
+        "max_concurrency": 8,
+        "requests_per_minute": 120
+      }
+    }
+  }
+}
+```
+
+多个 key 可以复用同一个权限组：
+
+```json
+{
+  "auth": {
+    "enabled": true,
+    "keys": [
+      {
+        "name": "app-a",
+        "key": "mr-app-a-token",
+        "access_group": "standard"
+      },
+      {
+        "name": "app-b",
+        "key": "mr-app-b-token",
+        "access_group": "standard"
+      }
+    ]
+  },
+  "access_groups": {
+    "standard": {
+      "allowed_models": ["public-*"],
+      "rate_limit": {
+        "max_concurrency": 8,
+        "requests_per_minute": 120
+      }
     }
   }
 }
@@ -178,6 +222,7 @@ Authorization: Bearer <token>
 - token 不允许访问请求模型：返回 `403 model_not_allowed`。
 - `allowed_models` 为空数组或不配置时，该客户端默认可访问全部模型。
 - `blocked_models` 命中时会拒绝访问，即使该模型也命中了 `allowed_models`。
+- 命中 client 级限流时返回 `429 rate_limit_exceeded`。
 - `/v1/models` 只返回当前 token 允许访问的模型。
 - `/admin/*` 当前不走客户端 token 鉴权，建议只暴露在可信网络内。
 
@@ -269,6 +314,12 @@ curl.exe http://localhost:8080/admin/overview
 curl.exe http://localhost:8080/admin/health
 ```
 
+查看 client 限流状态：
+
+```powershell
+curl.exe http://localhost:8080/admin/limits
+```
+
 查看完整指标：
 
 ```powershell
@@ -299,6 +350,7 @@ curl.exe "http://localhost:8080/admin/metrics/recent?limit=100"
 
 - `/admin/overview`: 总览，包含累计 summary、最近窗口和 endpoint 健康状态。
 - `/admin/health`: endpoint 健康、冷却、当前并发状态。
+- `/admin/limits`: client 级限流配置、当前并发和当前分钟窗口请求数。
 - `/admin/metrics`: 明细指标，包含每个 client/model/endpoint 组合的累计统计。
 - `/admin/metrics/summary`: 只返回全局 summary 和最近窗口。
 - `/admin/metrics/clients`: 按 client 聚合。

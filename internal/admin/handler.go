@@ -12,14 +12,24 @@ import (
 	"modelrouter/internal/router"
 )
 
+type ClientLimitProvider interface {
+	ClientLimitStatus() any
+}
+
 type Handler struct {
-	store      *router.Store
-	recorder   *metrics.Recorder
-	configPath string
+	store               *router.Store
+	recorder            *metrics.Recorder
+	configPath          string
+	clientLimitProvider ClientLimitProvider
 }
 
 func NewHandler(store *router.Store, recorder *metrics.Recorder, configPath string) *Handler {
 	return &Handler{store: store, recorder: recorder, configPath: configPath}
+}
+
+func (h *Handler) WithClientLimitProvider(provider ClientLimitProvider) *Handler {
+	h.clientLimitProvider = provider
+	return h
 }
 
 func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +79,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		"summary":               stats.Summary,
 		"windows":               stats.Windows,
 		"health":                h.store.Get().Health(),
+		"limits":                h.clientLimits(),
 	})
 }
 
@@ -78,6 +89,14 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.store.Get().Health())
+}
+
+func (h *Handler) Limits(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.clientLimits())
 }
 
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +257,13 @@ func pageMeta(total int, query metricsQuery, returned int) map[string]any {
 			"endpoint":    query.Endpoint,
 		},
 	}
+}
+
+func (h *Handler) clientLimits() any {
+	if h.clientLimitProvider == nil {
+		return nil
+	}
+	return h.clientLimitProvider.ClientLimitStatus()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

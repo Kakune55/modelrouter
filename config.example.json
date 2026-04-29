@@ -10,18 +10,23 @@
     "keys": [
       {
         "name": "default-client",
-        "key": "mr-replace-with-client-token"
+        "key": "mr-replace-with-client-token",
+        "access_group": "default-access"
       }
     ]
   },
-  "access": {
-    "default-client": {
+  "access_groups": {
+    "default-access": {
       "allowed_models": [
         "public-model-name"
       ],
       "blocked_models": [
         "disabled-model-name"
-      ]
+      ],
+      "rate_limit": {
+        "max_concurrency": 8,
+        "requests_per_minute": 120
+      }
     }
   },
   "models": {

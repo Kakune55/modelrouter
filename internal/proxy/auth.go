@@ -9,6 +9,7 @@ import (
 
 type clientIdentity struct {
 	Name            string
+	AccessGroup     string
 	AllowedPatterns []string
 	BlockedPatterns []string
 	Authenticated   bool
@@ -30,9 +31,10 @@ func (h *Handler) authenticate(r *http.Request) (clientIdentity, bool) {
 		}
 		identity := clientIdentity{
 			Name:          key.Name,
+			AccessGroup:   key.AccessGroup,
 			Authenticated: true,
 		}
-		if access, ok := cfg.Access[key.Name]; ok {
+		if access, ok := cfg.AccessGroups[key.AccessGroup]; ok {
 			identity.AllowedPatterns = append([]string(nil), access.AllowedModels...)
 			identity.BlockedPatterns = append([]string(nil), access.BlockedModels...)
 		}

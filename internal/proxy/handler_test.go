@@ -74,7 +74,7 @@ func TestChatCompletionsRejectsMissingAPIKey(t *testing.T) {
 		Auth: config.AuthConfig{
 			Enabled: true,
 			Keys: []config.ClientKeyConfig{
-				{Name: "client", Key: "secret"},
+				{Name: "client", Key: "secret", AccessGroup: "group-a"},
 			},
 		},
 		Models: map[string]config.ModelConfig{
@@ -106,11 +106,11 @@ func TestChatCompletionsRejectsDisallowedModel(t *testing.T) {
 		Auth: config.AuthConfig{
 			Enabled: true,
 			Keys: []config.ClientKeyConfig{
-				{Name: "client", Key: "secret"},
+				{Name: "client", Key: "secret", AccessGroup: "group-a"},
 			},
 		},
-		Access: map[string]config.AccessConfig{
-			"client": {AllowedModels: []string{"allowed"}},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {AllowedModels: []string{"allowed"}},
 		},
 		Models: map[string]config.ModelConfig{
 			"blocked": {RouteGroup: "group"},
@@ -424,11 +424,11 @@ func TestModelsFiltersByAPIKey(t *testing.T) {
 		Auth: config.AuthConfig{
 			Enabled: true,
 			Keys: []config.ClientKeyConfig{
-				{Name: "client", Key: "secret"},
+				{Name: "client", Key: "secret", AccessGroup: "group-a"},
 			},
 		},
-		Access: map[string]config.AccessConfig{
-			"client": {AllowedModels: []string{"a-model"}},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {AllowedModels: []string{"a-model"}},
 		},
 		Models: map[string]config.ModelConfig{
 			"z-model": {RouteGroup: "group"},
@@ -469,11 +469,11 @@ func TestModelsExcludesBlockedModels(t *testing.T) {
 		Auth: config.AuthConfig{
 			Enabled: true,
 			Keys: []config.ClientKeyConfig{
-				{Name: "client", Key: "secret"},
+				{Name: "client", Key: "secret", AccessGroup: "group-a"},
 			},
 		},
-		Access: map[string]config.AccessConfig{
-			"client": {BlockedModels: []string{"blocked-model"}},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {BlockedModels: []string{"blocked-model"}},
 		},
 		Models: map[string]config.ModelConfig{
 			"allowed-model": {RouteGroup: "group"},
@@ -514,11 +514,11 @@ func TestModelsSupportsAccessPatterns(t *testing.T) {
 		Auth: config.AuthConfig{
 			Enabled: true,
 			Keys: []config.ClientKeyConfig{
-				{Name: "client", Key: "secret"},
+				{Name: "client", Key: "secret", AccessGroup: "group-a"},
 			},
 		},
-		Access: map[string]config.AccessConfig{
-			"client": {
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {
 				AllowedModels: []string{"qwen-*", "deepseek-r?"},
 				BlockedModels: []string{"*-private", "qwen-bad"},
 			},
