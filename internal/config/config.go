@@ -33,6 +33,7 @@ type Config struct {
 	Auth         AuthConfig                   `json:"auth,omitempty"`
 	AccessGroups map[string]AccessGroupConfig `json:"access_groups,omitempty"`
 	Features     FeaturesConfig               `json:"features,omitempty"`
+	UsageLog     UsageLogConfig               `json:"usage_log,omitempty"`
 }
 
 type HTTPConfig struct {
@@ -52,6 +53,12 @@ type AdminKeyConfig struct {
 
 type FeaturesConfig struct {
 	AutoIncludeStreamUsage bool `json:"auto_include_stream_usage,omitempty"`
+}
+
+type UsageLogConfig struct {
+	Enabled        bool   `json:"enabled,omitempty"`
+	Dir            string `json:"dir,omitempty"`
+	RetentionHours int    `json:"retention_hours,omitempty"`
 }
 
 type AuthConfig struct {
@@ -141,6 +148,9 @@ func (c *Config) Validate() error {
 	}
 	if c.HTTP.TimeoutSeconds < 0 {
 		return errors.New("http.timeout_seconds must not be negative")
+	}
+	if c.UsageLog.RetentionHours < 0 {
+		return errors.New("usage_log.retention_hours must not be negative")
 	}
 	if err := c.validateAdmin(); err != nil {
 		return err

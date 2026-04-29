@@ -60,6 +60,11 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
   "features": {
     "auto_include_stream_usage": true
   },
+  "usage_log": {
+    "enabled": false,
+    "dir": "usage_logs",
+    "retention_hours": 720
+  },
   "auth": {
     "enabled": true,
     "keys": [
@@ -128,6 +133,9 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 - `admin.keys[].key`: Admin API 使用的 Bearer token。
 - `admin.keys[].permissions`: 当前 Admin key 拥有的权限列表。
 - `features.auto_include_stream_usage`: 当请求为 `stream: true` 时，自动向上游注入 `stream_options.include_usage=true`，便于统计流式 token。
+- `usage_log.enabled`: 是否开启用量日志落盘。默认关闭。
+- `usage_log.dir`: 用量日志目录，默认 `usage_logs`。
+- `usage_log.retention_hours`: 用量日志保留小时数。小于等于 `0` 时默认保留 `720` 小时。
 - `auth.enabled`: 是否启用客户端 Bearer token 鉴权。
 - `auth.keys[].name`: 客户端名称，用于统计维度和限流状态展示。
 - `auth.keys[].key`: 客户端请求 `/v1/*` 时使用的 API token。
@@ -481,6 +489,37 @@ Token 速率统计：
 - `average_ttft_ms` 表示平均首 token 延迟。
 - 非流式响应无法准确得到首 token 时间，因此通常只有端到端速率。
 - 自然时间窗口里的系统负载请看 `requests_per_min` 和 `bytes_per_sec`。
+
+## 用量日志
+
+用量日志默认关闭。开启后，每个完成的 `/v1/chat/completions` 请求会把一条记录投递到内存队列，由后台 goroutine 批量追加到本地 JSONL 文件：
+
+```json
+{
+  "usage_log": {
+    "enabled": true,
+    "dir": "usage_logs",
+    "retention_hours": 720
+  }
+}
+```
+
+日志文件按天切分，文件名类似：
+
+```text
+usage_logs/usage-2026-04-29.jsonl
+```
+
+每条记录包含 client、model、route group、endpoint、状态码、耗时、输出字节数、token 用量、TTFT、token 速率和错误摘要。不会记录请求里的 `messages`、prompt 或响应正文。
+
+清理策略：
+
+- `retention_hours` 控制日志保留时间。
+- 小于等于 `0` 时默认保留 `720` 小时。
+- 清理按文件修改时间判断，并做了节流，不会每个请求都全量扫描目录。
+- 写入使用有界 channel 和批量刷盘，默认最多缓存 `4096` 条，最多攒 `100` 条或等待 `1` 秒刷盘。
+- 如果磁盘长时间阻塞导致队列写满，新日志会被丢弃，以避免影响代理请求延迟。
+- 服务正常退出时会尽量 flush 队列中的剩余日志。
 
 ## 注意事项
 

@@ -13,6 +13,7 @@ import (
 	"modelrouter/internal/config"
 	"modelrouter/internal/metrics"
 	"modelrouter/internal/router"
+	"modelrouter/internal/usage"
 )
 
 var errEndpointConcurrencyLimited = errors.New("all candidate endpoints are at max concurrency")
@@ -20,6 +21,7 @@ var errEndpointConcurrencyLimited = errors.New("all candidate endpoints are at m
 type Handler struct {
 	store         *router.Store
 	recorder      *metrics.Recorder
+	usageLogger   *usage.Logger
 	client        *http.Client
 	clientLimiter *clientLimiter
 }
@@ -28,11 +30,19 @@ func NewHandler(store *router.Store, recorder *metrics.Recorder) *Handler {
 	return &Handler{
 		store:         store,
 		recorder:      recorder,
+		usageLogger:   usage.NewLogger(),
 		clientLimiter: newClientLimiter(),
 		client: &http.Client{
 			Timeout: 0,
 		},
 	}
+}
+
+func (h *Handler) Close() {
+	if h == nil || h.usageLogger == nil {
+		return
+	}
+	h.usageLogger.Close()
 }
 
 func (h *Handler) ClientLimitStatus() any {
@@ -90,7 +100,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if endpoint.Name == "" {
 		endpoint = route.Endpoint
 	}
-	h.recorder.Record(metrics.Event{
+	event := metrics.Event{
 		Client:             client.Name,
 		Model:              modelName,
 		RouteGroup:         route.Group,
@@ -105,7 +115,9 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		TTFT:               responseStats.TTFT,
 		GenerationDuration: responseStats.GenerationDuration,
 		Err:                err,
-	})
+	}
+	h.recorder.Record(event)
+	_ = h.usageLogger.Record(snap.Config.UsageLog, event)
 
 	if err != nil {
 		if responseStats.ResponseStarted {

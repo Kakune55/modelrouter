@@ -69,4 +69,5 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	proxyHandler.Close()
 }

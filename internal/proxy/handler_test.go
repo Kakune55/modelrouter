@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,6 +57,7 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	handler.ChatCompletions(rr, req)
+	handler.Close()
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
@@ -178,6 +180,7 @@ func TestChatCompletionsRewritesUpstreamModel(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	handler.ChatCompletions(rr, req)
+	handler.Close()
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
@@ -226,6 +229,7 @@ func TestEndpointModelOverridesModelUpstreamModel(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	handler.ChatCompletions(rr, req)
+	handler.Close()
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
@@ -331,6 +335,48 @@ func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "upstream failed") {
 		t.Fatalf("response should come from fallback endpoint: %s", rr.Body.String())
+	}
+}
+
+func TestChatCompletionsWritesUsageLogWhenEnabled(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	store := router.NewStore(&config.Config{
+		UsageLog: config.UsageLogConfig{Enabled: true, Dir: dir},
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: upstream.URL},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+	handler.Close()
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "usage-*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob usage logs: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("usage log files = %v", files)
 	}
 }
 

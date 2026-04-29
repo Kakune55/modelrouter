@@ -25,6 +25,11 @@
   "features": {
     "auto_include_stream_usage": true
   },
+  "usage_log": {
+    "enabled": false,
+    "dir": "usage_logs",
+    "retention_hours": 720
+  },
   "auth": {
     "enabled": true,
     "keys": [
