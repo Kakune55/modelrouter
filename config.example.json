@@ -2,6 +2,25 @@
   "http": {
     "timeout_seconds": 120
   },
+  "auth": {
+    "enabled": true,
+    "keys": [
+      {
+        "name": "default-client",
+        "key": "mr-replace-with-client-token"
+      }
+    ]
+  },
+  "access": {
+    "default-client": {
+      "allowed_models": [
+        "public-model-name"
+      ],
+      "blocked_models": [
+        "disabled-model-name"
+      ]
+    }
+  },
   "models": {
     "public-model-name": {
       "route_group": "public-model-route-group"

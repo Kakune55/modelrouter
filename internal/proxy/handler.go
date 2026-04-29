@@ -38,6 +38,11 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
 		return
 	}
+	client, ok := h.authenticate(r)
+	if !ok {
+		writeUnauthorized(w, "invalid or missing API key")
+		return
+	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {
@@ -48,6 +53,10 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	modelName, err := readModel(body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "bad_request")
+		return
+	}
+	if !client.CanAccessModel(modelName) {
+		writeOpenAIError(w, http.StatusForbidden, "model is not allowed for this API key", "model_not_allowed")
 		return
 	}
 
@@ -65,6 +74,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		endpoint = route.Endpoint
 	}
 	h.recorder.Record(metrics.Event{
+		Client:       client.Name,
 		Model:        modelName,
 		RouteGroup:   route.Group,
 		Endpoint:     endpoint.Name,

@@ -20,10 +20,27 @@ type Config struct {
 	Models      map[string]ModelConfig      `json:"models"`
 	RouteGroups map[string]RouteGroupConfig `json:"route_groups"`
 	HTTP        HTTPConfig                  `json:"http,omitempty"`
+	Auth        AuthConfig                  `json:"auth,omitempty"`
+	Access      map[string]AccessConfig     `json:"access,omitempty"`
 }
 
 type HTTPConfig struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+type AuthConfig struct {
+	Enabled bool              `json:"enabled,omitempty"`
+	Keys    []ClientKeyConfig `json:"keys,omitempty"`
+}
+
+type ClientKeyConfig struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+type AccessConfig struct {
+	AllowedModels []string `json:"allowed_models,omitempty"`
+	BlockedModels []string `json:"blocked_models,omitempty"`
 }
 
 type ModelConfig struct {
@@ -92,6 +109,9 @@ func (c *Config) Validate() error {
 	if c.HTTP.TimeoutSeconds < 0 {
 		return errors.New("http.timeout_seconds must not be negative")
 	}
+	if err := c.validateAuth(); err != nil {
+		return err
+	}
 
 	for name, model := range c.Models {
 		if strings.TrimSpace(name) == "" {
@@ -138,6 +158,52 @@ func (c *Config) Validate() error {
 			}
 			if ep.MaxConcurrency < 0 {
 				return fmt.Errorf("route_group %q endpoint %q max_concurrency must not be negative", name, ep.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateAuth() error {
+	if !c.Auth.Enabled {
+		return nil
+	}
+	if len(c.Auth.Keys) == 0 {
+		return errors.New("auth.keys must not be empty when auth is enabled")
+	}
+	names := map[string]struct{}{}
+	keys := map[string]struct{}{}
+	for i, key := range c.Auth.Keys {
+		if strings.TrimSpace(key.Name) == "" {
+			return fmt.Errorf("auth.keys[%d].name must not be empty", i)
+		}
+		if strings.TrimSpace(key.Key) == "" {
+			return fmt.Errorf("auth.keys[%d].key must not be empty", i)
+		}
+		if _, ok := names[key.Name]; ok {
+			return fmt.Errorf("auth key name %q is duplicated", key.Name)
+		}
+		names[key.Name] = struct{}{}
+		if _, ok := keys[key.Key]; ok {
+			return fmt.Errorf("auth key value for %q is duplicated", key.Name)
+		}
+		keys[key.Key] = struct{}{}
+	}
+	for name, access := range c.Access {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("access client name must not be empty")
+		}
+		if _, ok := names[name]; !ok {
+			return fmt.Errorf("access entry %q does not match any auth key name", name)
+		}
+		for _, model := range access.AllowedModels {
+			if strings.TrimSpace(model) == "" {
+				return fmt.Errorf("access entry %q has empty allowed model", name)
+			}
+		}
+		for _, model := range access.BlockedModels {
+			if strings.TrimSpace(model) == "" {
+				return fmt.Errorf("access entry %q has empty blocked model", name)
 			}
 		}
 	}

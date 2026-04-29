@@ -12,6 +12,7 @@ type Recorder struct {
 }
 
 type Counter struct {
+	Client             string        `json:"client"`
 	Model              string        `json:"model"`
 	RouteGroup         string        `json:"route_group"`
 	Endpoint           string        `json:"endpoint"`
@@ -29,6 +30,7 @@ type Counter struct {
 }
 
 type Event struct {
+	Client       string
 	Model        string
 	RouteGroup   string
 	Endpoint     string
@@ -54,10 +56,10 @@ func (r *Recorder) Record(ev Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := ev.Model + "\x00" + ev.RouteGroup + "\x00" + ev.Endpoint
+	key := ev.Client + "\x00" + ev.Model + "\x00" + ev.RouteGroup + "\x00" + ev.Endpoint
 	counter := r.series[key]
 	if counter == nil {
-		counter = &Counter{Model: ev.Model, RouteGroup: ev.RouteGroup, Endpoint: ev.Endpoint}
+		counter = &Counter{Client: ev.Client, Model: ev.Model, RouteGroup: ev.RouteGroup, Endpoint: ev.Endpoint}
 		r.series[key] = counter
 	}
 	counter.Requests++
@@ -86,6 +88,9 @@ func (r *Recorder) Snapshot() Snapshot {
 		items = append(items, copy)
 	}
 	sort.Slice(items, func(i, j int) bool {
+		if items[i].Client != items[j].Client {
+			return items[i].Client < items[j].Client
+		}
 		if items[i].Model != items[j].Model {
 			return items[i].Model < items[j].Model
 		}

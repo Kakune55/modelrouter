@@ -37,6 +37,25 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
   "http": {
     "timeout_seconds": 120
   },
+  "auth": {
+    "enabled": true,
+    "keys": [
+      {
+        "name": "default-client",
+        "key": "mr-replace-with-client-token"
+      }
+    ]
+  },
+  "access": {
+    "default-client": {
+      "allowed_models": [
+        "public-*"
+      ],
+      "blocked_models": [
+        "*-disabled"
+      ]
+    }
+  },
   "models": {
     "public-model-name": {
       "route_group": "public-model-route-group"
@@ -76,6 +95,11 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 配置说明：
 
 - `models`: 对外暴露的模型名。客户端请求使用这里的 key。
+- `auth.enabled`: 是否启用客户端 Bearer token 鉴权。
+- `auth.keys[].name`: 客户端名称，用来关联 `access` 权限和统计维度。
+- `auth.keys[].key`: 客户端请求 `/v1/*` 时使用的 API token。
+- `access.<client>.allowed_models`: 当前客户端允许访问的模型模式列表。为空表示默认允许全部模型。
+- `access.<client>.blocked_models`: 当前客户端禁止访问的模型模式列表。黑名单优先级高于白名单。
 - `route_group`: 公开模型名对应的路由组。
 - `route_groups`: 上游 endpoint 组。
 - `strategy`: 负载均衡策略。
@@ -99,18 +123,68 @@ endpoint.model > model.upstream_model > 请求里的公开 model 名
 查看当前可用模型：
 
 ```powershell
-curl.exe http://localhost:8080/v1/models
+curl.exe http://localhost:8080/v1/models `
+  -H "Authorization: Bearer mr-replace-with-client-token"
 ```
 
 发起 Chat Completions 请求：
 
 ```powershell
 curl.exe http://localhost:8080/v1/chat/completions `
+  -H "Authorization: Bearer mr-replace-with-client-token" `
   -H "Content-Type: application/json" `
   -d "{\"model\":\"public-model-name\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
 ```
 
 代理会使用选中 endpoint 上配置的 `api_key` 请求上游。客户端侧不需要知道真实上游模型名和上游地址。
+
+## 客户端鉴权
+
+启用鉴权后，所有 `/v1/*` 接口都需要携带 Bearer token：
+
+```text
+Authorization: Bearer <token>
+```
+
+示例配置：
+
+```json
+{
+  "auth": {
+    "enabled": true,
+    "keys": [
+      {
+        "name": "default-client",
+        "key": "mr-replace-with-client-token"
+      }
+    ]
+  },
+  "access": {
+    "default-client": {
+      "allowed_models": ["public-*"],
+      "blocked_models": ["*-disabled"]
+    }
+  }
+}
+```
+
+行为：
+
+- 未携带 token 或 token 错误：返回 `401 invalid_api_key`。
+- token 不允许访问请求模型：返回 `403 model_not_allowed`。
+- `allowed_models` 为空数组或不配置时，该客户端默认可访问全部模型。
+- `blocked_models` 命中时会拒绝访问，即使该模型也命中了 `allowed_models`。
+- `/v1/models` 只返回当前 token 允许访问的模型。
+- `/admin/*` 当前不走客户端 token 鉴权，建议只暴露在可信网络内。
+
+模型访问模式支持：
+
+- 精确匹配：`qwen3.6-27b-fp8`
+- 全量通配：`*`
+- 前缀匹配：`qwen-*`
+- 后缀匹配：`*-fp8`
+- 包含匹配：`*private*`
+- 单字符匹配：`deepseek-r?`
 
 ## 路由策略
 

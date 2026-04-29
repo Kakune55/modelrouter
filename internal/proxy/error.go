@@ -26,3 +26,8 @@ func writeOpenAIError(w http.ResponseWriter, status int, message, code string) {
 		},
 	})
 }
+
+func writeUnauthorized(w http.ResponseWriter, message string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="modelrouter"`)
+	writeOpenAIError(w, http.StatusUnauthorized, message, "invalid_api_key")
+}

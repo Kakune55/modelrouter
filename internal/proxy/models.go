@@ -24,12 +24,14 @@ func (h *Handler) Models(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
 		return
 	}
+	client, ok := h.authenticate(r)
+	if !ok {
+		writeUnauthorized(w, "invalid or missing API key")
+		return
+	}
 
 	cfg := h.store.Get().Config
-	names := make([]string, 0, len(cfg.Models))
-	for name := range cfg.Models {
-		names = append(names, name)
-	}
+	names := visibleModels(cfg, client)
 	sort.Strings(names)
 
 	now := time.Now().Unix()

@@ -69,6 +69,74 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsRejectsMissingAPIKey(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client", Key: "secret"},
+			},
+		},
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestChatCompletionsRejectsDisallowedModel(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client", Key: "secret"},
+			},
+		},
+		Access: map[string]config.AccessConfig{
+			"client": {AllowedModels: []string{"allowed"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"blocked": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"blocked","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestChatCompletionsRewritesUpstreamModel(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -281,5 +349,152 @@ func TestModelsListsConfiguredModels(t *testing.T) {
 	}
 	if resp.Data[0].ID != "a-model" || resp.Data[1].ID != "z-model" {
 		t.Fatalf("models not sorted: %+v", resp.Data)
+	}
+}
+
+func TestModelsFiltersByAPIKey(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client", Key: "secret"},
+			},
+		},
+		Access: map[string]config.AccessConfig{
+			"client": {AllowedModels: []string{"a-model"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"z-model": {RouteGroup: "group"},
+			"a-model": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rr := httptest.NewRecorder()
+
+	handler.Models(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+
+	var resp modelsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].ID != "a-model" {
+		t.Fatalf("models = %+v", resp.Data)
+	}
+}
+
+func TestModelsExcludesBlockedModels(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client", Key: "secret"},
+			},
+		},
+		Access: map[string]config.AccessConfig{
+			"client": {BlockedModels: []string{"blocked-model"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"allowed-model": {RouteGroup: "group"},
+			"blocked-model": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rr := httptest.NewRecorder()
+
+	handler.Models(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+
+	var resp modelsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].ID != "allowed-model" {
+		t.Fatalf("models = %+v", resp.Data)
+	}
+}
+
+func TestModelsSupportsAccessPatterns(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client", Key: "secret"},
+			},
+		},
+		Access: map[string]config.AccessConfig{
+			"client": {
+				AllowedModels: []string{"qwen-*", "deepseek-r?"},
+				BlockedModels: []string{"*-private", "qwen-bad"},
+			},
+		},
+		Models: map[string]config.ModelConfig{
+			"qwen-good":       {RouteGroup: "group"},
+			"qwen-private":    {RouteGroup: "group"},
+			"qwen-bad":        {RouteGroup: "group"},
+			"deepseek-r1":     {RouteGroup: "group"},
+			"deepseek-r10":    {RouteGroup: "group"},
+			"unmatched-model": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rr := httptest.NewRecorder()
+
+	handler.Models(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+
+	var resp modelsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	got := make([]string, 0, len(resp.Data))
+	for _, model := range resp.Data {
+		got = append(got, model.ID)
+	}
+	want := []string{"deepseek-r1", "qwen-good"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("models = %v, want %v", got, want)
 	}
 }
