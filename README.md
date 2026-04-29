@@ -56,6 +56,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
           "model": "provider-a/model-id",
           "base_url": "http://primary-upstream.example.com/v1",
           "api_key": "replace-with-primary-api-key",
+          "max_concurrency": 8,
           "weight": 1
         },
         {
@@ -63,6 +64,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
           "model": "provider-b/model-id",
           "base_url": "http://backup-upstream.example.com/v1",
           "api_key": "replace-with-backup-api-key",
+          "max_concurrency": 4,
           "weight": 1
         }
       ]
@@ -80,6 +82,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 - `endpoints[].model`: 当前 endpoint 实际使用的上游模型 ID。
 - `endpoints[].base_url`: OpenAI 兼容上游地址，例如 `http://host:port/v1`。
 - `endpoints[].api_key`: 当前 endpoint 使用的上游 API key。
+- `endpoints[].max_concurrency`: 当前 endpoint 最大并发数。小于等于 `0` 表示不限制。
 - `passive_health.failure_threshold`: 连续失败多少次后进入冷却。
 - `passive_health.cooldown_seconds`: 冷却时间，冷却期间该 endpoint 会被跳过。
 
@@ -131,6 +134,28 @@ curl.exe http://localhost:8080/v1/chat/completions `
 - 上游返回 `5xx`
 
 连续失败达到 `failure_threshold` 后，endpoint 进入冷却。冷却期间路由选择会跳过该 endpoint。
+
+## Endpoint 并发限制
+
+可以给每个 endpoint 设置独立的最大并发：
+
+```json
+{
+  "name": "primary-upstream",
+  "model": "provider-a/model-id",
+  "base_url": "http://primary-upstream.example.com/v1",
+  "api_key": "replace-with-primary-api-key",
+  "max_concurrency": 8
+}
+```
+
+请求转发前会先尝试占用 endpoint 的并发名额：
+
+- 有空余名额：请求转发给该 endpoint。
+- 当前 endpoint 已满：跳过该 endpoint，尝试同一个 route group 的下一个候选 endpoint。
+- 所有候选 endpoint 都已满：返回 OpenAI 风格的 `429 rate_limit_exceeded`。
+
+这个限制只在进程内生效。多实例部署时，每个实例会分别维护自己的并发计数。
 
 ## Admin API
 

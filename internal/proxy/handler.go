@@ -15,6 +15,8 @@ import (
 	"modelrouter/internal/router"
 )
 
+var errEndpointConcurrencyLimited = errors.New("all candidate endpoints are at max concurrency")
+
 type Handler struct {
 	store    *router.Store
 	recorder *metrics.Recorder
@@ -76,19 +78,30 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
+		if errors.Is(err, errEndpointConcurrencyLimited) {
+			writeOpenAIError(w, http.StatusTooManyRequests, err.Error(), "rate_limit_exceeded")
+			return
+		}
 		writeOpenAIError(w, http.StatusBadGateway, err.Error(), "upstream_error")
 	}
 }
 
 func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, route *router.Route) (int, usageInfo, int64, config.EndpointConfig, error) {
-	endpoints := append([]config.EndpointConfig{route.Endpoint}, route.Fallbacks()...)
+	endpoints := route.Candidates()
 	var lastErr error
+	limited := false
 	for _, endpoint := range endpoints {
+		if !route.TryAcquire(endpoint.Name) {
+			limited = true
+			continue
+		}
 		upstreamBody, err := rewriteModel(body, upstreamModel(route, endpoint))
 		if err != nil {
+			route.Release(endpoint.Name)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, err
 		}
 		status, usage, bytesOut, err := h.forward(w, r, upstreamBody, timeout, endpoint)
+		route.Release(endpoint.Name)
 		if err != nil {
 			route.MarkFailure(endpoint.Name)
 			lastErr = err
@@ -102,6 +115,9 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 		return status, usage, bytesOut, endpoint, nil
 	}
 	if lastErr == nil {
+		if limited {
+			return http.StatusTooManyRequests, usageInfo{}, 0, config.EndpointConfig{}, errEndpointConcurrencyLimited
+		}
 		lastErr = errors.New("no upstream endpoint available")
 	}
 	return http.StatusBadGateway, usageInfo{}, 0, config.EndpointConfig{}, lastErr

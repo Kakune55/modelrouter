@@ -134,3 +134,35 @@ func TestPassiveHealthReturnsErrorWhenAllEndpointsCooling(t *testing.T) {
 		t.Fatal("expected no available endpoint error")
 	}
 }
+
+func TestEndpointMaxConcurrency(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "a", BaseURL: "http://a", MaxConcurrency: 1},
+				},
+			},
+		},
+	})
+
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if !route.TryAcquire("a") {
+		t.Fatal("first acquire failed")
+	}
+	if route.TryAcquire("a") {
+		t.Fatal("second acquire should be limited")
+	}
+	route.Release("a")
+	if !route.TryAcquire("a") {
+		t.Fatal("acquire after release failed")
+	}
+	route.Release("a")
+}

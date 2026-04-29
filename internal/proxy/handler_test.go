@@ -164,6 +164,59 @@ func TestEndpointModelOverridesModelUpstreamModel(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsSkipsEndpointAtMaxConcurrency(t *testing.T) {
+	firstCalled := false
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer first.Close()
+
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer second.Close()
+
+	store := router.NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "first", BaseURL: first.URL, MaxConcurrency: 1},
+					{Name: "second", BaseURL: second.URL},
+				},
+			},
+		},
+	})
+
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if !route.TryAcquire("first") {
+		t.Fatal("failed to pre-acquire first endpoint")
+	}
+	defer route.Release("first")
+
+	handler := NewHandler(store, metrics.NewRecorder())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	if firstCalled {
+		t.Fatal("first endpoint should have been skipped")
+	}
+}
+
 func TestChatCompletionsRejectsUnknownModel(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{

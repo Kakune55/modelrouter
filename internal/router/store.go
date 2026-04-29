@@ -39,6 +39,7 @@ type endpointState struct {
 	cooldownUntil       time.Time
 	lastFailure         time.Time
 	lastSuccess         time.Time
+	inflight            int
 }
 
 func NewStore(cfg *config.Config) *Store {
@@ -103,18 +104,25 @@ func (s *Snapshot) Pick(modelName string, clientIP string) (*Route, error) {
 	if !ok {
 		return nil, fmt.Errorf("route group not found: %s", model.RouteGroup)
 	}
+	candidates := make([]config.EndpointConfig, 0, len(group.endpoints))
+	candidateIDs := make([]int, 0, len(group.endpoints))
 	for _, idx := range group.balancer.Order(clientIP) {
 		if group.isCooling(idx, time.Now()) {
 			continue
 		}
-		ep := group.endpoints[idx]
+		candidates = append(candidates, group.endpoints[idx])
+		candidateIDs = append(candidateIDs, idx)
+	}
+	if len(candidates) > 0 {
 		return &Route{
 			Model:         modelName,
 			UpstreamModel: model.UpstreamModel,
 			Group:         group.Name,
 			Strategy:      group.Config.Strategy,
-			Endpoint:      ep,
-			EndpointID:    idx,
+			Endpoint:      candidates[0],
+			EndpointID:    candidateIDs[0],
+			candidates:    candidates,
+			candidateIDs:  candidateIDs,
 			group:         group,
 		}, nil
 	}
@@ -128,23 +136,14 @@ type Route struct {
 	Strategy      string
 	Endpoint      config.EndpointConfig
 	EndpointID    int
+	candidates    []config.EndpointConfig
+	candidateIDs  []int
 	group         *GroupRuntime
 }
 
-func (r *Route) Fallbacks() []config.EndpointConfig {
-	if r.Strategy != config.StrategyFirstAvailable {
-		return nil
-	}
-	out := make([]config.EndpointConfig, 0, len(r.group.endpoints)-1)
-	for i, ep := range r.group.endpoints {
-		if i == r.EndpointID {
-			continue
-		}
-		if r.group.isCooling(i, time.Now()) {
-			continue
-		}
-		out = append(out, ep)
-	}
+func (r *Route) Candidates() []config.EndpointConfig {
+	out := make([]config.EndpointConfig, len(r.candidates))
+	copy(out, r.candidates)
 	return out
 }
 
@@ -154,6 +153,14 @@ func (r *Route) MarkSuccess(endpointName string) {
 
 func (r *Route) MarkFailure(endpointName string) {
 	r.group.markFailure(endpointName, time.Now())
+}
+
+func (r *Route) TryAcquire(endpointName string) bool {
+	return r.group.tryAcquire(endpointName)
+}
+
+func (r *Route) Release(endpointName string) {
+	r.group.release(endpointName)
 }
 
 func (g *GroupRuntime) isCooling(idx int, now time.Time) bool {
@@ -200,6 +207,38 @@ func (g *GroupRuntime) markFailure(endpointName string, now time.Time) {
 	}
 }
 
+func (g *GroupRuntime) tryAcquire(endpointName string) bool {
+	idx := g.endpointIndex(endpointName)
+	if idx < 0 {
+		return false
+	}
+	limit := g.endpoints[idx].MaxConcurrency
+	if limit <= 0 {
+		return true
+	}
+	state := &g.endpointState[idx]
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight >= limit {
+		return false
+	}
+	state.inflight++
+	return true
+}
+
+func (g *GroupRuntime) release(endpointName string) {
+	idx := g.endpointIndex(endpointName)
+	if idx < 0 || g.endpoints[idx].MaxConcurrency <= 0 {
+		return
+	}
+	state := &g.endpointState[idx]
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.inflight > 0 {
+		state.inflight--
+	}
+}
+
 func (g *GroupRuntime) endpointIndex(endpointName string) int {
 	for i, ep := range g.endpoints {
 		if ep.Name == endpointName {
@@ -219,6 +258,8 @@ type EndpointHealth struct {
 	ConsecutiveFailures int    `json:"consecutive_failures"`
 	LastFailureUnix     int64  `json:"last_failure_unix_sec,omitempty"`
 	LastSuccessUnix     int64  `json:"last_success_unix_sec,omitempty"`
+	MaxConcurrency      int    `json:"max_concurrency,omitempty"`
+	Inflight            int    `json:"inflight"`
 }
 
 func (s *Snapshot) Health() []EndpointHealth {
@@ -227,10 +268,11 @@ func (s *Snapshot) Health() []EndpointHealth {
 	for _, group := range s.groups {
 		for i, ep := range group.endpoints {
 			item := EndpointHealth{
-				RouteGroup:    group.Name,
-				Endpoint:      ep.Name,
-				Model:         ep.Model,
-				PassiveHealth: group.health.enabled,
+				RouteGroup:     group.Name,
+				Endpoint:       ep.Name,
+				Model:          ep.Model,
+				PassiveHealth:  group.health.enabled,
+				MaxConcurrency: ep.MaxConcurrency,
 			}
 			if i < len(group.endpointState) {
 				state := &group.endpointState[i]
@@ -246,6 +288,7 @@ func (s *Snapshot) Health() []EndpointHealth {
 				if !state.lastSuccess.IsZero() {
 					item.LastSuccessUnix = state.lastSuccess.Unix()
 				}
+				item.Inflight = state.inflight
 				state.mu.RUnlock()
 			}
 			items = append(items, item)

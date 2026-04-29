@@ -44,11 +44,12 @@ type PassiveHealthConfig struct {
 }
 
 type EndpointConfig struct {
-	Name    string `json:"name"`
-	Model   string `json:"model,omitempty"`
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key,omitempty"`
-	Weight  int    `json:"weight,omitempty"`
+	Name           string `json:"name"`
+	Model          string `json:"model,omitempty"`
+	BaseURL        string `json:"base_url"`
+	APIKey         string `json:"api_key,omitempty"`
+	Weight         int    `json:"weight,omitempty"`
+	MaxConcurrency int    `json:"max_concurrency,omitempty"`
 }
 
 func LoadFile(path string) (*Config, error) {
@@ -134,6 +135,9 @@ func (c *Config) Validate() error {
 			}
 			if ep.Weight < 0 {
 				return fmt.Errorf("route_group %q endpoint %q weight must not be negative", name, ep.Name)
+			}
+			if ep.MaxConcurrency < 0 {
+				return fmt.Errorf("route_group %q endpoint %q max_concurrency must not be negative", name, ep.Name)
 			}
 		}
 	}
