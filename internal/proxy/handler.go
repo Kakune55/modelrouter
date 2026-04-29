@@ -68,23 +68,26 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	status, usage, bytesOut, endpoint, err := h.forwardWithFallback(w, r, body, snap.Config.Timeout(), route)
+	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.Timeout(), snap.Config.Features, route)
 	duration := time.Since(start)
 	if endpoint.Name == "" {
 		endpoint = route.Endpoint
 	}
 	h.recorder.Record(metrics.Event{
-		Client:       client.Name,
-		Model:        modelName,
-		RouteGroup:   route.Group,
-		Endpoint:     endpoint.Name,
-		StatusCode:   status,
-		Duration:     duration,
-		BytesOut:     bytesOut,
-		PromptTokens: usage.PromptTokens,
-		OutputTokens: usage.CompletionTokens,
-		TotalTokens:  usage.TotalTokens,
-		Err:          err,
+		Client:             client.Name,
+		Model:              modelName,
+		RouteGroup:         route.Group,
+		Endpoint:           endpoint.Name,
+		StatusCode:         status,
+		Duration:           duration,
+		BytesOut:           bytesOut,
+		PromptTokens:       usage.PromptTokens,
+		OutputTokens:       usage.CompletionTokens,
+		TotalTokens:        usage.TotalTokens,
+		Streaming:          responseStats.Streaming,
+		TTFT:               responseStats.TTFT,
+		GenerationDuration: responseStats.GenerationDuration,
+		Err:                err,
 	})
 
 	if err != nil {
@@ -96,7 +99,13 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, route *router.Route) (int, usageInfo, int64, config.EndpointConfig, error) {
+type responseStats struct {
+	Streaming          bool
+	TTFT               time.Duration
+	GenerationDuration time.Duration
+}
+
+func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, features config.FeaturesConfig, route *router.Route) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
 	endpoints := route.Candidates()
 	var lastErr error
 	limited := false
@@ -105,12 +114,12 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			limited = true
 			continue
 		}
-		upstreamBody, err := rewriteModel(body, upstreamModel(route, endpoint))
+		upstreamBody, err := prepareUpstreamBody(body, upstreamModel(route, endpoint), features)
 		if err != nil {
 			route.Release(endpoint.Name)
-			return http.StatusBadRequest, usageInfo{}, 0, endpoint, err
+			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
 		}
-		status, usage, bytesOut, err := h.forward(w, r, upstreamBody, timeout, endpoint)
+		status, usage, bytesOut, stats, err := h.forward(w, r, upstreamBody, timeout, endpoint)
 		route.Release(endpoint.Name)
 		if err != nil {
 			route.MarkFailure(endpoint.Name)
@@ -122,15 +131,15 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 		} else {
 			route.MarkSuccess(endpoint.Name)
 		}
-		return status, usage, bytesOut, endpoint, nil
+		return status, usage, bytesOut, endpoint, stats, nil
 	}
 	if lastErr == nil {
 		if limited {
-			return http.StatusTooManyRequests, usageInfo{}, 0, config.EndpointConfig{}, errEndpointConcurrencyLimited
+			return http.StatusTooManyRequests, usageInfo{}, 0, config.EndpointConfig{}, responseStats{}, errEndpointConcurrencyLimited
 		}
 		lastErr = errors.New("no upstream endpoint available")
 	}
-	return http.StatusBadGateway, usageInfo{}, 0, config.EndpointConfig{}, lastErr
+	return http.StatusBadGateway, usageInfo{}, 0, config.EndpointConfig{}, responseStats{}, lastErr
 }
 
 func endpointFailureStatus(status int) bool {
@@ -147,7 +156,8 @@ func upstreamModel(route *router.Route, endpoint config.EndpointConfig) string {
 	return route.Model
 }
 
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig) (int, usageInfo, int64, error) {
+func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig) (int, usageInfo, int64, responseStats, error) {
+	started := time.Now()
 	ctx := r.Context()
 	if timeout > 0 {
 		var cancel func()
@@ -158,7 +168,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 	upstreamURL := strings.TrimRight(endpoint.BaseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
-		return http.StatusBadGateway, usageInfo{}, 0, err
+		return http.StatusBadGateway, usageInfo{}, 0, responseStats{}, err
 	}
 	copyRequestHeaders(req.Header, r.Header)
 	if endpoint.APIKey != "" {
@@ -168,7 +178,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return http.StatusBadGateway, usageInfo{}, 0, err
+		return http.StatusBadGateway, usageInfo{}, 0, responseStats{}, err
 	}
 	defer resp.Body.Close()
 
@@ -176,19 +186,19 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 	w.WriteHeader(resp.StatusCode)
 
 	if isStreamResponse(resp.Header) {
-		n, err := copyStreaming(w, resp.Body)
-		return resp.StatusCode, usageInfo{}, n, err
+		n, stats, err := copyStreaming(w, resp.Body, started)
+		return resp.StatusCode, stats.Usage, n, responseStats{Streaming: true, TTFT: stats.TTFT, GenerationDuration: stats.GenerationDuration}, err
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return resp.StatusCode, usageInfo{}, 0, err
+		return resp.StatusCode, usageInfo{}, 0, responseStats{}, err
 	}
 	n, writeErr := w.Write(respBody)
 	if writeErr != nil {
-		return resp.StatusCode, usageInfo{}, int64(n), writeErr
+		return resp.StatusCode, usageInfo{}, int64(n), responseStats{}, writeErr
 	}
-	return resp.StatusCode, parseUsage(respBody), int64(n), nil
+	return resp.StatusCode, parseUsage(respBody), int64(n), responseStats{}, nil
 }
 
 func readModel(body []byte) (string, error) {
@@ -204,20 +214,32 @@ func readModel(body []byte) (string, error) {
 	return req.Model, nil
 }
 
-func rewriteModel(body []byte, upstreamModel string) ([]byte, error) {
-	if strings.TrimSpace(upstreamModel) == "" {
-		return body, nil
-	}
+func prepareUpstreamBody(body []byte, upstreamModel string, features config.FeaturesConfig) ([]byte, error) {
 	var req map[string]any
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, errors.New("request body must be valid JSON")
 	}
-	req["model"] = upstreamModel
+	if strings.TrimSpace(upstreamModel) != "" {
+		req["model"] = upstreamModel
+	}
+	if features.AutoIncludeStreamUsage && requestIsStreaming(req) {
+		streamOptions, _ := req["stream_options"].(map[string]any)
+		if streamOptions == nil {
+			streamOptions = map[string]any{}
+		}
+		streamOptions["include_usage"] = true
+		req["stream_options"] = streamOptions
+	}
 	rewritten, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 	return rewritten, nil
+}
+
+func requestIsStreaming(req map[string]any) bool {
+	stream, ok := req["stream"].(bool)
+	return ok && stream
 }
 
 func clientIP(r *http.Request) string {

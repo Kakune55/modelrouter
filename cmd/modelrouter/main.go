@@ -37,7 +37,10 @@ func main() {
 	mux.HandleFunc("/v1/chat/completions", proxyHandler.ChatCompletions)
 	mux.HandleFunc("/admin/config", adminHandler.Config)
 	mux.HandleFunc("/admin/reload", adminHandler.Reload)
-	mux.HandleFunc("/admin/stats", adminHandler.Stats)
+	mux.HandleFunc("/admin/overview", adminHandler.Overview)
+	mux.HandleFunc("/admin/health", adminHandler.Health)
+	mux.HandleFunc("/admin/metrics", adminHandler.Metrics)
+	mux.HandleFunc("/admin/metrics/", adminHandler.Metrics)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))

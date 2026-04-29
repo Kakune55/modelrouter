@@ -37,6 +37,9 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
   "http": {
     "timeout_seconds": 120
   },
+  "features": {
+    "auto_include_stream_usage": true
+  },
   "auth": {
     "enabled": true,
     "keys": [
@@ -95,6 +98,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 配置说明：
 
 - `models`: 对外暴露的模型名。客户端请求使用这里的 key。
+- `features.auto_include_stream_usage`: 当请求为 `stream: true` 时，自动向上游注入 `stream_options.include_usage=true`，便于统计流式 token。
 - `auth.enabled`: 是否启用客户端 Bearer token 鉴权。
 - `auth.keys[].name`: 客户端名称，用来关联 `access` 权限和统计维度。
 - `auth.keys[].key`: 客户端请求 `/v1/*` 时使用的 API token。
@@ -253,11 +257,122 @@ curl.exe -X PUT http://localhost:8080/admin/config `
 curl.exe -X POST http://localhost:8080/admin/reload
 ```
 
-查看统计和 endpoint 健康状态：
+查看运行总览：
 
 ```powershell
-curl.exe http://localhost:8080/admin/stats
+curl.exe http://localhost:8080/admin/overview
 ```
+
+查看 endpoint 健康状态：
+
+```powershell
+curl.exe http://localhost:8080/admin/health
+```
+
+查看完整指标：
+
+```powershell
+curl.exe http://localhost:8080/admin/metrics
+```
+
+按条件查询明细指标：
+
+```powershell
+curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public-model-name&limit=50&offset=0"
+```
+
+查看各维度聚合：
+
+```powershell
+curl.exe http://localhost:8080/admin/metrics/clients
+curl.exe http://localhost:8080/admin/metrics/models
+curl.exe http://localhost:8080/admin/metrics/endpoints
+```
+
+查看最近请求事件：
+
+```powershell
+curl.exe "http://localhost:8080/admin/metrics/recent?limit=100"
+```
+
+指标接口说明：
+
+- `/admin/overview`: 总览，包含累计 summary、最近窗口和 endpoint 健康状态。
+- `/admin/health`: endpoint 健康、冷却、当前并发状态。
+- `/admin/metrics`: 明细指标，包含每个 client/model/endpoint 组合的累计统计。
+- `/admin/metrics/summary`: 只返回全局 summary 和最近窗口。
+- `/admin/metrics/clients`: 按 client 聚合。
+- `/admin/metrics/models`: 按 model 聚合。
+- `/admin/metrics/endpoints`: 按 endpoint 聚合。
+- `/admin/metrics/recent`: 最近请求事件，支持 `limit` 参数，最大 `1000`。
+
+指标查询参数：
+
+- `client`: 只看指定客户端。
+- `model`: 只看指定公开模型名。
+- `route_group`: 只看指定路由组。
+- `endpoint`: 只看指定 endpoint。
+- `limit`: 返回数量，默认 `100`，最大 `1000`。
+- `offset`: 分页偏移，默认 `0`。
+
+指标快照说明：
+
+- 管理指标使用 1 秒内存快照缓存，避免 dashboard 高频刷新时反复全量聚合。
+- 因此 `/admin/overview` 和 `/admin/metrics/*` 可能最多延迟约 1 秒反映最新请求。
+
+支持查询参数的接口：
+
+- `/admin/metrics`
+- `/admin/metrics/clients`
+- `/admin/metrics/models`
+- `/admin/metrics/endpoints`
+- `/admin/metrics/recent`
+
+列表响应包含 `meta`：
+
+```json
+{
+  "meta": {
+    "total": 120,
+    "returned": 50,
+    "limit": 50,
+    "offset": 0,
+    "filters": {
+      "client": "default-client",
+      "model": "public-model-name",
+      "route_group": "",
+      "endpoint": ""
+    }
+  },
+  "items": []
+}
+```
+
+核心指标：
+
+- `requests`、`successes`、`failures`
+- `error_rate`
+- `average_latency_ms`
+- `p95_latency_ms`
+- `requests_per_min`
+- `average_end_to_end_token_rate`
+- `average_generation_token_rate`
+- `average_ttft_ms`
+- `bytes_per_sec`
+- `prompt_tokens`、`output_tokens`、`total_tokens`
+- `status_codes`
+
+Token 速率统计：
+
+- 非流式响应会从最终 JSON 的 `usage` 字段读取 token。
+- 流式响应会从 SSE `data:` 事件里的 `usage` 字段读取 token。
+- 打开 `features.auto_include_stream_usage` 后，代理会对 `stream: true` 请求自动补充 `stream_options.include_usage=true`。
+- 如果上游不支持或不返回 usage，token 指标仍会是 `0`，但请求数、延迟、字节吞吐仍会正常统计。
+- `average_end_to_end_token_rate` 表示端到端速率，按 `output_tokens / 总请求耗时` 计算，包含排队、prompt 处理、首 token 延迟和网络传输。
+- `average_generation_token_rate` 表示流式生成速率，按 `output_tokens / (结束时间 - 首 token 时间)` 计算，更接近 CherryStudio 这类客户端展示的吐字速度。
+- `average_ttft_ms` 表示平均首 token 延迟。
+- 非流式响应无法准确得到首 token 时间，因此通常只有端到端速率。
+- 自然时间窗口里的系统负载请看 `requests_per_min` 和 `bytes_per_sec`。
 
 ## 注意事项
 

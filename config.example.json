@@ -2,6 +2,9 @@
   "http": {
     "timeout_seconds": 120
   },
+  "features": {
+    "auto_include_stream_usage": true
+  },
   "auth": {
     "enabled": true,
     "keys": [

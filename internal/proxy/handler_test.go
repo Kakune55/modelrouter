@@ -285,6 +285,73 @@ func TestChatCompletionsSkipsEndpointAtMaxConcurrency(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsCapturesStreamingUsage(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req map[string]any
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal body: %v", err)
+		}
+		streamOptions, ok := req["stream_options"].(map[string]any)
+		if !ok || streamOptions["include_usage"] != true {
+			t.Fatalf("stream_options.include_usage not injected: %+v", req["stream_options"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	store := router.NewStore(&config.Config{
+		Features: config.FeaturesConfig{AutoIncludeStreamUsage: true},
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: upstream.URL},
+				},
+			},
+		},
+	})
+	recorder := metrics.NewRecorder()
+	handler := NewHandler(store, recorder)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","stream":true,"messages":[]}`))
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	stats := recorder.Snapshot()
+	if stats.Summary.TotalTokens != 5 {
+		t.Fatalf("total tokens = %d", stats.Summary.TotalTokens)
+	}
+	if !strings.Contains(rr.Body.String(), "data: [DONE]") {
+		t.Fatalf("stream body missing DONE: %s", rr.Body.String())
+	}
+}
+
+func TestStreamingDetectsReasoningContentAsFirstToken(t *testing.T) {
+	event := parseSSEEvent([]byte(`data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}`))
+	if !event.HasContent {
+		t.Fatal("expected reasoning_content to count as generated text")
+	}
+
+	roleOnly := parseSSEEvent([]byte(`data: {"choices":[{"delta":{"role":"assistant"}}]}`))
+	if roleOnly.HasContent {
+		t.Fatal("role-only delta should not count as generated text")
+	}
+}
+
 func TestChatCompletionsRejectsUnknownModel(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{

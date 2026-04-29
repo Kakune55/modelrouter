@@ -22,10 +22,15 @@ type Config struct {
 	HTTP        HTTPConfig                  `json:"http,omitempty"`
 	Auth        AuthConfig                  `json:"auth,omitempty"`
 	Access      map[string]AccessConfig     `json:"access,omitempty"`
+	Features    FeaturesConfig              `json:"features,omitempty"`
 }
 
 type HTTPConfig struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+type FeaturesConfig struct {
+	AutoIncludeStreamUsage bool `json:"auto_include_stream_usage,omitempty"`
 }
 
 type AuthConfig struct {
