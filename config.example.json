@@ -1,0 +1,36 @@
+{
+  "http": {
+    "timeout_seconds": 120
+  },
+  "models": {
+    "public-model-name": {
+      "route_group": "public-model-route-group"
+    }
+  },
+  "route_groups": {
+    "public-model-route-group": {
+      "strategy": "first_available",
+      "passive_health": {
+        "enabled": true,
+        "failure_threshold": 2,
+        "cooldown_seconds": 30
+      },
+      "endpoints": [
+        {
+          "name": "primary-upstream",
+          "model": "provider-a/model-id",
+          "base_url": "http://primary-upstream.example.com/v1",
+          "api_key": "replace-with-primary-api-key",
+          "weight": 1
+        },
+        {
+          "name": "backup-upstream",
+          "model": "provider-b/model-id",
+          "base_url": "http://backup-upstream.example.com/v1",
+          "api_key": "replace-with-backup-api-key",
+          "weight": 1
+        }
+      ]
+    }
+  }
+}
