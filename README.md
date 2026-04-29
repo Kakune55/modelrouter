@@ -37,6 +37,9 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
   "http": {
     "timeout_seconds": 120
   },
+  "admin": {
+    "token": "mr-replace-with-admin-token"
+  },
   "features": {
     "auto_include_stream_usage": true
   },
@@ -103,6 +106,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 配置说明：
 
 - `models`: 对外暴露的模型名。客户端请求使用这里的 key。
+- `admin.token`: Admin API 使用的 Bearer token。为空时不校验 Admin API，生产环境不建议留空。
 - `features.auto_include_stream_usage`: 当请求为 `stream: true` 时，自动向上游注入 `stream_options.include_usage=true`，便于统计流式 token。
 - `auth.enabled`: 是否启用客户端 Bearer token 鉴权。
 - `auth.keys[].name`: 客户端名称，用于统计维度和限流状态展示。
@@ -224,7 +228,7 @@ Authorization: Bearer <token>
 - `blocked_models` 命中时会拒绝访问，即使该模型也命中了 `allowed_models`。
 - 命中 client 级限流时返回 `429 rate_limit_exceeded`。
 - `/v1/models` 只返回当前 token 允许访问的模型。
-- `/admin/*` 当前不走客户端 token 鉴权，建议只暴露在可信网络内。
+- `/admin/*` 使用独立的 `admin.token` 鉴权，不复用客户端 token。
 
 模型访问模式支持：
 
@@ -243,6 +247,8 @@ Authorization: Bearer <token>
 - `first_available`: 优先使用第一个可用 endpoint，失败时尝试后续 endpoint。
 
 `first_available` 适合主备模式。配合 `passive_health` 后，失败 endpoint 会被临时跳过，冷却结束后自动恢复参与路由。
+
+非流式请求在上游连接失败、读取失败、返回 `429` 或 `5xx` 时会尝试后续 endpoint。流式请求一旦已经开始向客户端输出，就不会再切换 endpoint。
 
 ## 被动健康检查
 
@@ -285,13 +291,17 @@ Authorization: Bearer <token>
 查看当前配置：
 
 ```powershell
-curl.exe http://localhost:8080/admin/config
+curl.exe http://localhost:8080/admin/config `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
+
+`GET /admin/config` 会对 `admin.token`、客户端 key 和上游 `api_key` 做脱敏。
 
 运行时替换配置：
 
 ```powershell
 curl.exe -X PUT http://localhost:8080/admin/config `
+  -H "Authorization: Bearer mr-replace-with-admin-token" `
   -H "Content-Type: application/json" `
   --data-binary "@config.example.json"
 ```
@@ -299,51 +309,61 @@ curl.exe -X PUT http://localhost:8080/admin/config `
 从启动时指定的配置文件重新加载：
 
 ```powershell
-curl.exe -X POST http://localhost:8080/admin/reload
+curl.exe -X POST http://localhost:8080/admin/reload `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 查看运行总览：
 
 ```powershell
-curl.exe http://localhost:8080/admin/overview
+curl.exe http://localhost:8080/admin/overview `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 查看 endpoint 健康状态：
 
 ```powershell
-curl.exe http://localhost:8080/admin/health
+curl.exe http://localhost:8080/admin/health `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 查看 client 限流状态：
 
 ```powershell
-curl.exe http://localhost:8080/admin/limits
+curl.exe http://localhost:8080/admin/limits `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 查看完整指标：
 
 ```powershell
-curl.exe http://localhost:8080/admin/metrics
+curl.exe http://localhost:8080/admin/metrics `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 按条件查询明细指标：
 
 ```powershell
-curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public-model-name&limit=50&offset=0"
+curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public-model-name&limit=50&offset=0" `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 查看各维度聚合：
 
 ```powershell
-curl.exe http://localhost:8080/admin/metrics/clients
-curl.exe http://localhost:8080/admin/metrics/models
-curl.exe http://localhost:8080/admin/metrics/endpoints
+curl.exe http://localhost:8080/admin/metrics/clients `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
+curl.exe http://localhost:8080/admin/metrics/models `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
+curl.exe http://localhost:8080/admin/metrics/endpoints `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 查看最近请求事件：
 
 ```powershell
-curl.exe "http://localhost:8080/admin/metrics/recent?limit=100"
+curl.exe "http://localhost:8080/admin/metrics/recent?limit=100" `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
 指标接口说明：

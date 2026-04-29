@@ -2,6 +2,9 @@
   "http": {
     "timeout_seconds": 120
   },
+  "admin": {
+    "token": "mr-replace-with-admin-token"
+  },
   "features": {
     "auto_include_stream_usage": true
   },
