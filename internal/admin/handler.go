@@ -34,13 +34,16 @@ func (h *Handler) WithClientLimitProvider(provider ClientLimitProvider) *Handler
 }
 
 func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(w, r) {
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
+		if !h.authorize(w, r, config.AdminPermissionConfigRead) {
+			return
+		}
 		writeJSON(w, http.StatusOK, redactedConfig(h.store.Get().Config))
 	case http.MethodPut:
+		if !h.authorize(w, r, config.AdminPermissionConfigWrite) {
+			return
+		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
 		if err != nil {
 			writeAdminError(w, http.StatusBadRequest, "failed to read request body")
@@ -59,7 +62,7 @@ func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(w, r) {
+	if !h.authorize(w, r, config.AdminPermissionConfigWrite) {
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -76,7 +79,7 @@ func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(w, r) {
+	if !h.authorize(w, r, config.AdminPermissionRead) {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -94,7 +97,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(w, r) {
+	if !h.authorize(w, r, config.AdminPermissionHealthRead) {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -105,7 +108,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Limits(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(w, r) {
+	if !h.authorize(w, r, config.AdminPermissionLimitsRead) {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -116,7 +119,7 @@ func (h *Handler) Limits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(w, r) {
+	if !h.authorize(w, r, config.AdminPermissionMetricsRead) {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -173,18 +176,70 @@ type metricsQuery struct {
 	Offset     int    `json:"offset"`
 }
 
-func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) bool {
-	token := strings.TrimSpace(h.store.Get().Config.Admin.Token)
-	if token == "" {
+func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, permission string) bool {
+	adminConfig := h.store.Get().Config.Admin
+	token := strings.TrimSpace(adminConfig.Token)
+	if token == "" && len(adminConfig.Keys) == 0 {
 		return true
 	}
 	got, ok := bearerToken(r.Header.Get("Authorization"))
-	if ok && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1 {
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="modelrouter-admin"`)
+		writeAdminError(w, http.StatusUnauthorized, "invalid or missing admin token")
+		return false
+	}
+	if token != "" && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1 {
 		return true
 	}
-	w.Header().Set("WWW-Authenticate", `Bearer realm="modelrouter-admin"`)
+	for _, key := range adminConfig.Keys {
+		if subtle.ConstantTimeCompare([]byte(got), []byte(key.Key)) != 1 {
+			continue
+		}
+		if adminKeyAllows(key, permission) {
+			return true
+		}
+		writeAdminError(w, http.StatusForbidden, "admin token does not have required permission")
+		return false
+	}
 	writeAdminError(w, http.StatusUnauthorized, "invalid or missing admin token")
 	return false
+}
+
+func adminKeyAllows(key config.AdminKeyConfig, permission string) bool {
+	for _, candidate := range key.Permissions {
+		switch candidate {
+		case config.AdminPermissionAll:
+			return true
+		case config.AdminPermissionRead:
+			if adminReadPermission(permission) {
+				return true
+			}
+		case config.AdminPermissionWrite:
+			if adminWritePermission(permission) {
+				return true
+			}
+		case permission:
+			return true
+		}
+	}
+	return false
+}
+
+func adminReadPermission(permission string) bool {
+	switch permission {
+	case config.AdminPermissionConfigRead,
+		config.AdminPermissionMetricsRead,
+		config.AdminPermissionHealthRead,
+		config.AdminPermissionLimitsRead,
+		config.AdminPermissionRead:
+		return true
+	default:
+		return false
+	}
+}
+
+func adminWritePermission(permission string) bool {
+	return permission == config.AdminPermissionConfigWrite
 }
 
 func bearerToken(header string) (string, bool) {
@@ -205,6 +260,13 @@ func redactedConfig(cfg *config.Config) *config.Config {
 	clone := *cfg
 	if clone.Admin.Token != "" {
 		clone.Admin.Token = "********"
+	}
+	clone.Admin.Keys = append([]config.AdminKeyConfig(nil), cfg.Admin.Keys...)
+	for i := range clone.Admin.Keys {
+		if clone.Admin.Keys[i].Key != "" {
+			clone.Admin.Keys[i].Key = "********"
+		}
+		clone.Admin.Keys[i].Permissions = append([]string(nil), clone.Admin.Keys[i].Permissions...)
 	}
 	clone.Auth.Keys = append([]config.ClientKeyConfig(nil), cfg.Auth.Keys...)
 	for i := range clone.Auth.Keys {

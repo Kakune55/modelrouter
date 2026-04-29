@@ -24,6 +24,11 @@ func TestValidateRejectsMissingRouteGroup(t *testing.T) {
 
 func TestValidateAcceptsValidConfig(t *testing.T) {
 	cfg := &Config{
+		Admin: AdminConfig{
+			Keys: []AdminKeyConfig{
+				{Name: "dashboard", Key: "admin-read-token", Permissions: []string{AdminPermissionRead}},
+			},
+		},
 		Models: map[string]ModelConfig{
 			"demo": {RouteGroup: "group"},
 		},
@@ -39,6 +44,31 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidAdminPermission(t *testing.T) {
+	cfg := &Config{
+		Admin: AdminConfig{
+			Keys: []AdminKeyConfig{
+				{Name: "dashboard", Key: "admin-read-token", Permissions: []string{"unknown"}},
+			},
+		},
+		Models: map[string]ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]RouteGroupConfig{
+			"group": {
+				Strategy: StrategyRoundRobin,
+				Endpoints: []EndpointConfig{
+					{Name: "ep", BaseURL: "http://localhost:8081"},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error")
 	}
 }
 

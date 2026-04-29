@@ -14,6 +14,15 @@ const (
 	StrategyRandom         = "random"
 	StrategyIPHash         = "ip_hash"
 	StrategyFirstAvailable = "first_available"
+
+	AdminPermissionAll         = "admin:*"
+	AdminPermissionRead        = "admin:read"
+	AdminPermissionWrite       = "admin:write"
+	AdminPermissionConfigRead  = "config:read"
+	AdminPermissionConfigWrite = "config:write"
+	AdminPermissionMetricsRead = "metrics:read"
+	AdminPermissionHealthRead  = "health:read"
+	AdminPermissionLimitsRead  = "limits:read"
 )
 
 type Config struct {
@@ -31,7 +40,14 @@ type HTTPConfig struct {
 }
 
 type AdminConfig struct {
-	Token string `json:"token,omitempty"`
+	Token string           `json:"token,omitempty"`
+	Keys  []AdminKeyConfig `json:"keys,omitempty"`
+}
+
+type AdminKeyConfig struct {
+	Name        string   `json:"name"`
+	Key         string   `json:"key"`
+	Permissions []string `json:"permissions"`
 }
 
 type FeaturesConfig struct {
@@ -126,6 +142,9 @@ func (c *Config) Validate() error {
 	if c.HTTP.TimeoutSeconds < 0 {
 		return errors.New("http.timeout_seconds must not be negative")
 	}
+	if err := c.validateAdmin(); err != nil {
+		return err
+	}
 	if err := c.validateAuth(); err != nil {
 		return err
 	}
@@ -175,6 +194,39 @@ func (c *Config) Validate() error {
 			}
 			if ep.MaxConcurrency < 0 {
 				return fmt.Errorf("route_group %q endpoint %q max_concurrency must not be negative", name, ep.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateAdmin() error {
+	names := map[string]struct{}{}
+	keys := map[string]struct{}{}
+	if strings.TrimSpace(c.Admin.Token) != "" {
+		keys[c.Admin.Token] = struct{}{}
+	}
+	for i, key := range c.Admin.Keys {
+		if strings.TrimSpace(key.Name) == "" {
+			return fmt.Errorf("admin.keys[%d].name must not be empty", i)
+		}
+		if strings.TrimSpace(key.Key) == "" {
+			return fmt.Errorf("admin.keys[%d].key must not be empty", i)
+		}
+		if len(key.Permissions) == 0 {
+			return fmt.Errorf("admin key %q permissions must not be empty", key.Name)
+		}
+		if _, ok := names[key.Name]; ok {
+			return fmt.Errorf("admin key name %q is duplicated", key.Name)
+		}
+		names[key.Name] = struct{}{}
+		if _, ok := keys[key.Key]; ok {
+			return fmt.Errorf("admin key value for %q is duplicated", key.Name)
+		}
+		keys[key.Key] = struct{}{}
+		for _, permission := range key.Permissions {
+			if !validAdminPermission(permission) {
+				return fmt.Errorf("admin key %q has unsupported permission %q", key.Name, permission)
 			}
 		}
 	}
@@ -237,6 +289,22 @@ func (c *Config) validateAuth() error {
 		}
 	}
 	return nil
+}
+
+func validAdminPermission(permission string) bool {
+	switch permission {
+	case AdminPermissionAll,
+		AdminPermissionRead,
+		AdminPermissionWrite,
+		AdminPermissionConfigRead,
+		AdminPermissionConfigWrite,
+		AdminPermissionMetricsRead,
+		AdminPermissionHealthRead,
+		AdminPermissionLimitsRead:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Config) Timeout() time.Duration {

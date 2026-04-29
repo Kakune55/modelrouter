@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,9 +108,62 @@ func TestAdminRequiresTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAdminKeyPermissions(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Admin: config.AdminConfig{
+			Keys: []config.AdminKeyConfig{
+				{Name: "dashboard", Key: "read-token", Permissions: []string{config.AdminPermissionRead}},
+				{Name: "config-writer", Key: "write-token", Permissions: []string{config.AdminPermissionConfigWrite}},
+			},
+		},
+		Models: map[string]config.ModelConfig{
+			"model-a": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "endpoint", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder(), "")
+
+	readReq := httptest.NewRequest(http.MethodGet, "/admin/metrics", nil)
+	readReq.Header.Set("Authorization", "Bearer read-token")
+	readResp := httptest.NewRecorder()
+	handler.Metrics(readResp, readReq)
+	if readResp.Code != http.StatusOK {
+		t.Fatalf("read status = %d body = %s", readResp.Code, readResp.Body.String())
+	}
+
+	writeBody := []byte(`{"models":{"model-a":{"route_group":"group"}},"route_groups":{"group":{"strategy":"round_robin","endpoints":[{"name":"endpoint","base_url":"http://127.0.0.1"}]}}}`)
+	blockedReq := httptest.NewRequest(http.MethodPut, "/admin/config", bytes.NewReader(writeBody))
+	blockedReq.Header.Set("Authorization", "Bearer read-token")
+	blockedResp := httptest.NewRecorder()
+	handler.Config(blockedResp, blockedReq)
+	if blockedResp.Code != http.StatusForbidden {
+		t.Fatalf("blocked status = %d body = %s", blockedResp.Code, blockedResp.Body.String())
+	}
+
+	writeReq := httptest.NewRequest(http.MethodPut, "/admin/config", bytes.NewReader(writeBody))
+	writeReq.Header.Set("Authorization", "Bearer write-token")
+	writeResp := httptest.NewRecorder()
+	handler.Config(writeResp, writeReq)
+	if writeResp.Code != http.StatusOK {
+		t.Fatalf("write status = %d body = %s", writeResp.Code, writeResp.Body.String())
+	}
+}
+
 func TestAdminConfigRedactsSecrets(t *testing.T) {
 	store := router.NewStore(&config.Config{
-		Admin: config.AdminConfig{Token: "admin-token"},
+		Admin: config.AdminConfig{
+			Token: "admin-token",
+			Keys: []config.AdminKeyConfig{
+				{Name: "dashboard", Key: "dashboard-token", Permissions: []string{config.AdminPermissionRead}},
+			},
+		},
 		Auth: config.AuthConfig{
 			Enabled: true,
 			Keys: []config.ClientKeyConfig{
@@ -142,7 +196,7 @@ func TestAdminConfigRedactsSecrets(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rr.Code, body)
 	}
-	for _, secret := range []string{"admin-token", "client-token", "upstream-token"} {
+	for _, secret := range []string{"admin-token", "dashboard-token", "client-token", "upstream-token"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("response leaked secret %q: %s", secret, body)
 		}

@@ -3,7 +3,24 @@
     "timeout_seconds": 120
   },
   "admin": {
-    "token": "mr-replace-with-admin-token"
+    "token": "mr-replace-with-admin-token",
+    "keys": [
+      {
+        "name": "dashboard",
+        "key": "mr-replace-with-dashboard-token",
+        "permissions": [
+          "admin:read"
+        ]
+      },
+      {
+        "name": "config-manager",
+        "key": "mr-replace-with-config-manager-token",
+        "permissions": [
+          "config:read",
+          "config:write"
+        ]
+      }
+    ]
   },
   "features": {
     "auto_include_stream_usage": true
