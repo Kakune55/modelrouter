@@ -82,7 +82,7 @@ jobs:
             -trimpath \
             -ldflags "-s -w -X main.version=${TAG}" \
             -o "build/${BIN_NAME}" \
-            ./...
+            ./cmd/modelrouter
 
           ASSET_BASE="${REPO_NAME}_${TAG}_${TARGET}"
 
