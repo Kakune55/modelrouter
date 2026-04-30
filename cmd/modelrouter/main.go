@@ -35,6 +35,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", proxyHandler.Models)
 	mux.HandleFunc("/v1/chat/completions", proxyHandler.ChatCompletions)
+	mux.HandleFunc("/v1/embeddings", proxyHandler.Embeddings)
+	mux.HandleFunc("/openapi.json", openAPIHandler())
 	mux.HandleFunc("/admin/config", adminHandler.Config)
 	mux.HandleFunc("/admin/reload", adminHandler.Reload)
 	mux.HandleFunc("/admin/overview", adminHandler.Overview)

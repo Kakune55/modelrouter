@@ -4,7 +4,7 @@
 
 ## 功能
 
-- OpenAI 兼容接口：`POST /v1/chat/completions`
+- OpenAI 兼容接口：`POST /v1/chat/completions`、`POST /v1/embeddings`
 - OpenAI 兼容模型列表：`GET /v1/models`
 - 按请求里的 `model` 字段路由
 - 一个公开模型名可以绑定一个 route group
@@ -27,6 +27,11 @@ go run ./cmd/modelrouter -addr :8080 -config config.example.json
 ```powershell
 go run ./cmd/modelrouter -addr :8080 -config config.json
 ```
+
+启动参数：
+
+- `-addr`: HTTP 监听地址，默认 `:8080`。
+- `-config`: JSON 配置文件路径，默认 `config.json`。
 
 ## 配置
 
@@ -188,6 +193,15 @@ curl.exe http://localhost:8080/v1/chat/completions `
 
 如果同时配置了 `endpoints[].headers.Authorization` 和 `endpoints[].api_key`，最终发往上游的 `Authorization` 会以 `api_key` 为准。
 
+发起 Embeddings 请求：
+
+```powershell
+curl.exe http://localhost:8080/v1/embeddings `
+  -H "Authorization: Bearer mr-replace-with-client-token" `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"public-model-name\",\"input\":\"hello\"}"
+```
+
 ## 客户端鉴权
 
 启用鉴权后，所有 `/v1/*` 接口都需要携带 Bearer token：
@@ -321,6 +335,14 @@ Authorization: Bearer <token>
 这个限制只在进程内生效。多实例部署时，每个实例会分别维护自己的并发计数。
 
 ## Admin API
+
+OpenAPI 文档：
+
+```powershell
+curl.exe http://localhost:8080/openapi.json
+```
+
+该文档通过 `go:embed` 打包进二进制，部署时不需要额外携带 JSON 文件。
 
 Admin API 支持两种鉴权方式：
 
@@ -498,7 +520,7 @@ Token 速率统计：
 
 ## 用量日志
 
-用量日志默认关闭。开启后，每个完成的 `/v1/chat/completions` 请求会把一条记录投递到内存队列，由后台 goroutine 批量追加到本地 JSONL 文件：
+用量日志默认关闭。开启后，每个完成的 `/v1/chat/completions` 或 `/v1/embeddings` 请求会把一条记录投递到内存队列，由后台 goroutine 批量追加到本地 JSONL 文件：
 
 ```json
 {

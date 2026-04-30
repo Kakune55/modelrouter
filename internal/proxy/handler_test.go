@@ -82,6 +82,79 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsProxiesRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req map[string]any
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal body: %v", err)
+		}
+		if req["model"] != "upstream-embedding-model" {
+			t.Fatalf("model was not rewritten: %+v", req)
+		}
+		if got := r.Header.Get("X-Provider-Project"); got != "project-a" {
+			t.Fatalf("unexpected custom header: %s", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data":   []any{},
+			"usage": map[string]int{
+				"prompt_tokens": 5,
+				"total_tokens":  5,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	store := router.NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"embedding-demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{
+						Name:    "upstream",
+						BaseURL: upstream.URL,
+						Model:   "upstream-embedding-model",
+						Headers: map[string]string{
+							"X-Provider-Project": "project-a",
+						},
+					},
+				},
+			},
+		},
+	})
+	recorder := metrics.NewRecorder()
+	handler := NewHandler(store, recorder)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"embedding-demo","input":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler.Embeddings(rr, req)
+	handler.Close()
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	stats := recorder.Snapshot()
+	if len(stats.Items) != 1 {
+		t.Fatalf("expected one stats item, got %d", len(stats.Items))
+	}
+	if stats.Items[0].PromptTokens != 5 || stats.Items[0].TotalTokens != 5 {
+		t.Fatalf("stats item = %+v", stats.Items[0])
+	}
+}
+
 func TestChatCompletionsRejectsMissingAPIKey(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Auth: config.AuthConfig{

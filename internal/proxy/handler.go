@@ -50,6 +50,14 @@ func (h *Handler) ClientLimitStatus() any {
 }
 
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
+	h.proxyOpenAI(w, r, "/chat/completions", true)
+}
+
+func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
+	h.proxyOpenAI(w, r, "/embeddings", false)
+}
+
+func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPath string, useFeatures bool) {
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
 		return
@@ -95,7 +103,11 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.Timeout(), snap.Config.Features, route)
+	features := config.FeaturesConfig{}
+	if useFeatures {
+		features = snap.Config.Features
+	}
+	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.Timeout(), features, route, upstreamPath)
 	duration := time.Since(start)
 	if endpoint.Name == "" {
 		endpoint = route.Endpoint
@@ -147,7 +159,7 @@ type upstreamResponse struct {
 	Stats      responseStats
 }
 
-func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, features config.FeaturesConfig, route *router.Route) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
+func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, features config.FeaturesConfig, route *router.Route, upstreamPath string) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
 	endpoints := route.Candidates()
 	var lastErr error
 	var lastResponse *upstreamResponse
@@ -163,7 +175,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			route.Release(endpoint.Name)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
 		}
-		resp, err := h.forward(w, r, upstreamBody, timeout, endpoint)
+		resp, err := h.forward(w, r, upstreamBody, timeout, endpoint, upstreamPath)
 		route.Release(endpoint.Name)
 		if err != nil {
 			route.MarkFailure(endpoint.Name)
@@ -230,7 +242,7 @@ func applyEndpointHeaders(header http.Header, values map[string]string) {
 	}
 }
 
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig) (*upstreamResponse, error) {
+func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig, upstreamPath string) (*upstreamResponse, error) {
 	started := time.Now()
 	ctx := r.Context()
 	if timeout > 0 {
@@ -239,7 +251,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 		defer cancel()
 	}
 
-	upstreamURL := strings.TrimRight(endpoint.BaseURL, "/") + "/chat/completions"
+	upstreamURL := strings.TrimRight(endpoint.BaseURL, "/") + upstreamPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
