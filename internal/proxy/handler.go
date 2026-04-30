@@ -221,6 +221,15 @@ func upstreamModel(route *router.Route, endpoint config.EndpointConfig) string {
 	return route.Model
 }
 
+func applyEndpointHeaders(header http.Header, values map[string]string) {
+	for key, value := range values {
+		if strings.TrimSpace(key) == "" || hopByHopHeader(key) {
+			continue
+		}
+		header.Set(key, value)
+	}
+}
+
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig) (*upstreamResponse, error) {
 	started := time.Now()
 	ctx := r.Context()
@@ -236,6 +245,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 		return nil, err
 	}
 	copyRequestHeaders(req.Header, r.Header)
+	applyEndpointHeaders(req.Header, endpoint.Headers)
 	if endpoint.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+endpoint.APIKey)
 	}

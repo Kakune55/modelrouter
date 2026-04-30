@@ -1157,6 +1157,13 @@
             "type": "string",
             "description": "Upstream API key. Redacted as ******** in GET /admin/config."
           },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Fixed request headers sent to this upstream endpoint. If both headers.Authorization and api_key are set, api_key controls Authorization."
+          },
           "weight": {
             "type": "integer",
             "minimum": 0

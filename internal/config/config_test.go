@@ -208,3 +208,23 @@ func TestValidateRejectsNegativeRateLimit(t *testing.T) {
 		t.Fatal("expected validation error")
 	}
 }
+
+func TestValidateRejectsEmptyEndpointHeaderName(t *testing.T) {
+	cfg := &Config{
+		Models: map[string]ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]RouteGroupConfig{
+			"group": {
+				Strategy: StrategyRoundRobin,
+				Endpoints: []EndpointConfig{
+					{Name: "ep", BaseURL: "http://localhost:8081", Headers: map[string]string{"": "value"}},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}

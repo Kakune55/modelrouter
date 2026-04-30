@@ -73,6 +73,9 @@
           "model": "provider-a/model-id",
           "base_url": "http://primary-upstream.example.com/v1",
           "api_key": "replace-with-primary-api-key",
+          "headers": {
+            "X-Provider-Project": "replace-with-project-id"
+          },
           "max_concurrency": 8,
           "weight": 1
         },

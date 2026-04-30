@@ -22,6 +22,9 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer upstream-key" {
 			t.Fatalf("unexpected authorization header: %s", got)
 		}
+		if got := r.Header.Get("X-Provider-Project"); got != "project-a" {
+			t.Fatalf("unexpected custom header: %s", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":      "chatcmpl-test",
@@ -44,7 +47,15 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 			"group": {
 				Strategy: config.StrategyRoundRobin,
 				Endpoints: []config.EndpointConfig{
-					{Name: "upstream", BaseURL: upstream.URL, APIKey: "upstream-key"},
+					{
+						Name:    "upstream",
+						BaseURL: upstream.URL,
+						APIKey:  "upstream-key",
+						Headers: map[string]string{
+							"Authorization":      "Bearer custom-key",
+							"X-Provider-Project": "project-a",
+						},
+					},
 				},
 			},
 		},

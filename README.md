@@ -108,6 +108,9 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
           "model": "provider-a/model-id",
           "base_url": "http://primary-upstream.example.com/v1",
           "api_key": "replace-with-primary-api-key",
+          "headers": {
+            "X-Provider-Project": "replace-with-project-id"
+          },
           "max_concurrency": 8,
           "weight": 1
         },
@@ -150,6 +153,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 - `endpoints[].model`: 当前 endpoint 实际使用的上游模型 ID。
 - `endpoints[].base_url`: OpenAI 兼容上游地址，例如 `http://host:port/v1`。
 - `endpoints[].api_key`: 当前 endpoint 使用的上游 API key。
+- `endpoints[].headers`: 发往当前 endpoint 的固定请求头，适合供应商项目 ID、组织 ID 等额外鉴权或路由参数。
 - `endpoints[].max_concurrency`: 当前 endpoint 最大并发数。小于等于 `0` 表示不限制。
 - `passive_health.failure_threshold`: 连续失败多少次后进入冷却。
 - `passive_health.cooldown_seconds`: 冷却时间，冷却期间该 endpoint 会被跳过。
@@ -181,6 +185,8 @@ curl.exe http://localhost:8080/v1/chat/completions `
 ```
 
 代理会使用选中 endpoint 上配置的 `api_key` 请求上游。客户端侧不需要知道真实上游模型名和上游地址。
+
+如果同时配置了 `endpoints[].headers.Authorization` 和 `endpoints[].api_key`，最终发往上游的 `Authorization` 会以 `api_key` 为准。
 
 ## 客户端鉴权
 

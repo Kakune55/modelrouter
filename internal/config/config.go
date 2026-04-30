@@ -101,12 +101,13 @@ type PassiveHealthConfig struct {
 }
 
 type EndpointConfig struct {
-	Name           string `json:"name"`
-	Model          string `json:"model,omitempty"`
-	BaseURL        string `json:"base_url"`
-	APIKey         string `json:"api_key,omitempty"`
-	Weight         int    `json:"weight,omitempty"`
-	MaxConcurrency int    `json:"max_concurrency,omitempty"`
+	Name           string            `json:"name"`
+	Model          string            `json:"model,omitempty"`
+	BaseURL        string            `json:"base_url"`
+	APIKey         string            `json:"api_key,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Weight         int               `json:"weight,omitempty"`
+	MaxConcurrency int               `json:"max_concurrency,omitempty"`
 }
 
 func LoadFile(path string) (*Config, error) {
@@ -198,6 +199,11 @@ func (c *Config) Validate() error {
 			seen[ep.Name] = struct{}{}
 			if strings.TrimSpace(ep.BaseURL) == "" {
 				return fmt.Errorf("route_group %q endpoint %q base_url must not be empty", name, ep.Name)
+			}
+			for headerName := range ep.Headers {
+				if strings.TrimSpace(headerName) == "" {
+					return fmt.Errorf("route_group %q endpoint %q has empty header name", name, ep.Name)
+				}
 			}
 			if ep.Weight < 0 {
 				return fmt.Errorf("route_group %q endpoint %q weight must not be negative", name, ep.Name)
