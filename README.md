@@ -354,8 +354,8 @@ Admin API 支持两种鉴权方式：
 - `admin:*`: 全权限。
 - `admin:read`: 所有只读接口，包括配置读取、指标、健康状态和限流状态。
 - `admin:write`: 写接口，目前等价于配置更新和 reload。
-- `config:read`: `GET /admin/config`。
-- `config:write`: `PUT /admin/config`、`POST /admin/reload`。
+- `config:read`: `GET /admin/config`、资源级配置读取接口。
+- `config:write`: `PUT /admin/config`、`POST /admin/reload`、资源级配置写入接口。
 - `metrics:read`: `/admin/metrics` 和子路径。
 - `health:read`: `/admin/health`。
 - `limits:read`: `/admin/limits`。
@@ -369,13 +369,40 @@ curl.exe http://localhost:8080/admin/config `
 
 `GET /admin/config` 会对 `admin.token`、客户端 key 和上游 `api_key` 做脱敏。
 
-运行时替换配置：
+运行时替换配置并写回配置文件：
 
 ```powershell
 curl.exe -X PUT http://localhost:8080/admin/config `
   -H "Authorization: Bearer mr-replace-with-admin-token" `
   -H "Content-Type: application/json" `
   --data-binary "@config.example.json"
+```
+
+资源级配置接口适合 WebUI 使用，避免每次都提交完整配置：
+
+- `GET /admin/models`、`GET /admin/models/{name}`、`PUT /admin/models/{name}`、`DELETE /admin/models/{name}`
+- `GET /admin/route-groups`、`GET /admin/route-groups/{name}`、`PUT /admin/route-groups/{name}`、`DELETE /admin/route-groups/{name}`
+- `GET /admin/client-keys`、`GET /admin/client-keys/{name}`、`PUT /admin/client-keys/{name}`、`DELETE /admin/client-keys/{name}`
+- `GET /admin/access-groups`、`GET /admin/access-groups/{name}`、`PUT /admin/access-groups/{name}`、`DELETE /admin/access-groups/{name}`
+
+所有资源级写入都会先基于当前内存配置生成新配置，完整校验后写回启动配置文件，再热更新内存配置。模型名、route group 名、client key 名和 access group 名放在路径里，包含特殊字符时需要 URL encode。`GET /admin/route-groups*` 和 `GET /admin/client-keys*` 会对敏感字段脱敏。
+
+新增或更新模型：
+
+```powershell
+curl.exe -X PUT http://localhost:8080/admin/models/public-model-name `
+  -H "Authorization: Bearer mr-replace-with-admin-token" `
+  -H "Content-Type: application/json" `
+  -d "{\"route_group\":\"public-model-route-group\"}"
+```
+
+新增或更新客户端 key：
+
+```powershell
+curl.exe -X PUT http://localhost:8080/admin/client-keys/app-a `
+  -H "Authorization: Bearer mr-replace-with-admin-token" `
+  -H "Content-Type: application/json" `
+  -d "{\"key\":\"mr-app-a-token\",\"access_group\":\"default-access\"}"
 ```
 
 从启动时指定的配置文件重新加载：
@@ -584,6 +611,6 @@ usage_logs/usage-2026-04-29.jsonl
 
 - 配置热更新会先校验新配置，校验通过后再切换。
 - 正在处理中的请求会继续使用它开始时拿到的配置快照。
-- `PUT /admin/config` 当前只更新内存配置，不会写回配置文件。
+- `PUT /admin/config` 会先校验并写回启动时指定的配置文件，写入成功后再切换内存配置。
 - 代码变更需要重启服务才会生效。
 - `weight` 字段暂时保留，当前版本还没有实现加权策略。

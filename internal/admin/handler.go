@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -55,8 +56,257 @@ func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
 			writeAdminError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if err := config.SaveFile(h.configPath, cfg); err != nil {
+			writeAdminError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		h.store.Update(cfg)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "persisted": "true"})
+	default:
+		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *Handler) Models(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r, configPermissionForMethod(r.Method)) {
+		return
+	}
+	name, hasName, ok := resourceName(r.URL.EscapedPath(), "/admin/models")
+	if !ok {
+		writeAdminError(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if hasName {
+			snap := h.store.Get().Config
+			model, ok := snap.Models[name]
+			if !ok {
+				writeAdminError(w, http.StatusNotFound, "model not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, model)
+			return
+		}
+		writeJSON(w, http.StatusOK, h.store.Get().Config.Models)
+	case http.MethodPut:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var model config.ModelConfig
+		if !decodeAdminJSON(w, r, &model) {
+			return
+		}
+		if err := h.updateConfig(func(cfg *config.Config) {
+			if cfg.Models == nil {
+				cfg.Models = map[string]config.ModelConfig{}
+			}
+			cfg.Models[name] = model
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": name, "persisted": "true"})
+	case http.MethodDelete:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if _, ok := h.store.Get().Config.Models[name]; !ok {
+			writeAdminError(w, http.StatusNotFound, "model not found")
+			return
+		}
+		if err := h.updateConfig(func(cfg *config.Config) {
+			delete(cfg.Models, name)
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "name": name, "persisted": "true"})
+	default:
+		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *Handler) RouteGroups(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r, configPermissionForMethod(r.Method)) {
+		return
+	}
+	name, hasName, ok := resourceName(r.URL.EscapedPath(), "/admin/route-groups")
+	if !ok {
+		writeAdminError(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if hasName {
+			group, ok := redactedConfig(h.store.Get().Config).RouteGroups[name]
+			if !ok {
+				writeAdminError(w, http.StatusNotFound, "route group not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, group)
+			return
+		}
+		writeJSON(w, http.StatusOK, redactedConfig(h.store.Get().Config).RouteGroups)
+	case http.MethodPut:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var group config.RouteGroupConfig
+		if !decodeAdminJSON(w, r, &group) {
+			return
+		}
+		if err := h.updateConfig(func(cfg *config.Config) {
+			if cfg.RouteGroups == nil {
+				cfg.RouteGroups = map[string]config.RouteGroupConfig{}
+			}
+			cfg.RouteGroups[name] = group
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": name, "persisted": "true"})
+	case http.MethodDelete:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if _, ok := h.store.Get().Config.RouteGroups[name]; !ok {
+			writeAdminError(w, http.StatusNotFound, "route group not found")
+			return
+		}
+		if err := h.updateConfig(func(cfg *config.Config) {
+			delete(cfg.RouteGroups, name)
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "name": name, "persisted": "true"})
+	default:
+		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *Handler) ClientKeys(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r, configPermissionForMethod(r.Method)) {
+		return
+	}
+	name, hasName, ok := resourceName(r.URL.EscapedPath(), "/admin/client-keys")
+	if !ok {
+		writeAdminError(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		keys := redactedConfig(h.store.Get().Config).Auth.Keys
+		if hasName {
+			for _, key := range keys {
+				if key.Name == name {
+					writeJSON(w, http.StatusOK, key)
+					return
+				}
+			}
+			writeAdminError(w, http.StatusNotFound, "client key not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, keys)
+	case http.MethodPut:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var key config.ClientKeyConfig
+		if !decodeAdminJSON(w, r, &key) {
+			return
+		}
+		key.Name = name
+		if err := h.updateConfig(func(cfg *config.Config) {
+			cfg.Auth.Keys = upsertClientKey(cfg.Auth.Keys, key)
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": name, "persisted": "true"})
+	case http.MethodDelete:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !clientKeyExists(h.store.Get().Config.Auth.Keys, name) {
+			writeAdminError(w, http.StatusNotFound, "client key not found")
+			return
+		}
+		if err := h.updateConfig(func(cfg *config.Config) {
+			cfg.Auth.Keys = deleteClientKey(cfg.Auth.Keys, name)
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "name": name, "persisted": "true"})
+	default:
+		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (h *Handler) AccessGroups(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r, configPermissionForMethod(r.Method)) {
+		return
+	}
+	name, hasName, ok := resourceName(r.URL.EscapedPath(), "/admin/access-groups")
+	if !ok {
+		writeAdminError(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if hasName {
+			group, ok := h.store.Get().Config.AccessGroups[name]
+			if !ok {
+				writeAdminError(w, http.StatusNotFound, "access group not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, group)
+			return
+		}
+		writeJSON(w, http.StatusOK, h.store.Get().Config.AccessGroups)
+	case http.MethodPut:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var group config.AccessGroupConfig
+		if !decodeAdminJSON(w, r, &group) {
+			return
+		}
+		if err := h.updateConfig(func(cfg *config.Config) {
+			if cfg.AccessGroups == nil {
+				cfg.AccessGroups = map[string]config.AccessGroupConfig{}
+			}
+			cfg.AccessGroups[name] = group
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": name, "persisted": "true"})
+	case http.MethodDelete:
+		if !hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if _, ok := h.store.Get().Config.AccessGroups[name]; !ok {
+			writeAdminError(w, http.StatusNotFound, "access group not found")
+			return
+		}
+		if err := h.updateConfig(func(cfg *config.Config) {
+			delete(cfg.AccessGroups, name)
+		}); err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "name": name, "persisted": "true"})
 	default:
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -261,6 +511,13 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, permission s
 	}
 	writeAdminError(w, http.StatusUnauthorized, "invalid or missing admin token")
 	return false
+}
+
+func configPermissionForMethod(method string) string {
+	if method == http.MethodGet {
+		return config.AdminPermissionConfigRead
+	}
+	return config.AdminPermissionConfigWrite
 }
 
 func adminKeyAllows(key config.AdminKeyConfig, permission string) bool {
@@ -496,6 +753,134 @@ func (h *Handler) clientLimits() any {
 		return nil
 	}
 	return h.clientLimitProvider.ClientLimitStatus()
+}
+
+func (h *Handler) updateConfig(mutator func(*config.Config)) error {
+	next := cloneConfig(h.store.Get().Config)
+	mutator(next)
+	if err := next.Validate(); err != nil {
+		return configUpdateError{status: http.StatusBadRequest, err: err}
+	}
+	if err := config.SaveFile(h.configPath, next); err != nil {
+		return configUpdateError{status: http.StatusInternalServerError, err: err}
+	}
+	h.store.Update(next)
+	return nil
+}
+
+type configUpdateError struct {
+	status int
+	err    error
+}
+
+func (e configUpdateError) Error() string {
+	return e.err.Error()
+}
+
+func cloneConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return &config.Config{}
+	}
+	clone := *cfg
+	clone.Admin.Keys = append([]config.AdminKeyConfig(nil), cfg.Admin.Keys...)
+	for i := range clone.Admin.Keys {
+		clone.Admin.Keys[i].Permissions = append([]string(nil), cfg.Admin.Keys[i].Permissions...)
+	}
+	clone.Auth.Keys = append([]config.ClientKeyConfig(nil), cfg.Auth.Keys...)
+	clone.Models = make(map[string]config.ModelConfig, len(cfg.Models))
+	for key, value := range cfg.Models {
+		clone.Models[key] = value
+	}
+	clone.AccessGroups = make(map[string]config.AccessGroupConfig, len(cfg.AccessGroups))
+	for key, value := range cfg.AccessGroups {
+		value.AllowedModels = append([]string(nil), value.AllowedModels...)
+		value.BlockedModels = append([]string(nil), value.BlockedModels...)
+		clone.AccessGroups[key] = value
+	}
+	clone.RouteGroups = make(map[string]config.RouteGroupConfig, len(cfg.RouteGroups))
+	for key, value := range cfg.RouteGroups {
+		value.Endpoints = append([]config.EndpointConfig(nil), value.Endpoints...)
+		for i := range value.Endpoints {
+			if value.Endpoints[i].Headers != nil {
+				headers := make(map[string]string, len(value.Endpoints[i].Headers))
+				for header, headerValue := range value.Endpoints[i].Headers {
+					headers[header] = headerValue
+				}
+				value.Endpoints[i].Headers = headers
+			}
+		}
+		clone.RouteGroups[key] = value
+	}
+	return &clone
+}
+
+func decodeAdminJSON(w http.ResponseWriter, r *http.Request, out any) bool {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "failed to read request body")
+		return false
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		writeAdminError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	return true
+}
+
+func resourceName(path, prefix string) (string, bool, bool) {
+	path = strings.TrimSuffix(path, "/")
+	if path == prefix {
+		return "", false, true
+	}
+	raw := strings.TrimPrefix(path, prefix+"/")
+	if raw == path || raw == "" || strings.Contains(raw, "/") {
+		return "", false, false
+	}
+	name, err := url.PathUnescape(raw)
+	if err != nil || strings.TrimSpace(name) == "" {
+		return "", false, false
+	}
+	return name, true, true
+}
+
+func upsertClientKey(keys []config.ClientKeyConfig, key config.ClientKeyConfig) []config.ClientKeyConfig {
+	out := append([]config.ClientKeyConfig(nil), keys...)
+	for i := range out {
+		if out[i].Name == key.Name {
+			out[i] = key
+			return out
+		}
+	}
+	return append(out, key)
+}
+
+func deleteClientKey(keys []config.ClientKeyConfig, name string) []config.ClientKeyConfig {
+	out := keys[:0]
+	for _, key := range keys {
+		if key.Name != name {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+func clientKeyExists(keys []config.ClientKeyConfig, name string) bool {
+	for _, key := range keys {
+		if key.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func statusForConfigError(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	if updateErr, ok := err.(configUpdateError); ok {
+		return updateErr.status
+	}
+	return http.StatusBadRequest
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

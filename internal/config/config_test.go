@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestValidateRejectsMissingRouteGroup(t *testing.T) {
 	cfg := &Config{
@@ -44,6 +48,37 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestSaveFileWritesLoadableConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := &Config{
+		Models: map[string]ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]RouteGroupConfig{
+			"group": {
+				Strategy: StrategyRoundRobin,
+				Endpoints: []EndpointConfig{
+					{Name: "ep", BaseURL: "http://localhost:8081"},
+				},
+			},
+		},
+	}
+
+	if err := SaveFile(path, cfg); err != nil {
+		t.Fatalf("SaveFile() error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stat saved file: %v", err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if _, ok := loaded.Models["demo"]; !ok {
+		t.Fatalf("loaded models = %+v", loaded.Models)
 	}
 }
 

@@ -249,7 +249,7 @@
           "Admin"
         ],
         "summary": "Replace runtime config",
-        "description": "Requires config:write or admin:write. This updates in-memory config only and does not write back to the config file.",
+        "description": "Requires config:write or admin:write. This validates the config, writes it back to the startup config file, then updates the in-memory config.",
         "operationId": "updateAdminConfig",
         "security": [
           {
@@ -278,6 +278,582 @@
           },
           "403": {
             "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
+    "/admin/models": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List configured models",
+        "description": "Requires config:read or admin:read.",
+        "operationId": "listAdminModels",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured public models keyed by model name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/ModelConfig"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
+    "/admin/models/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceName"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get configured model",
+        "description": "Requires config:read or admin:read.",
+        "operationId": "getAdminModel",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create or replace configured model",
+        "description": "Requires config:write or admin:write. The full config is validated and persisted after this resource update.",
+        "operationId": "upsertAdminModel",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete configured model",
+        "description": "Requires config:write or admin:write.",
+        "operationId": "deleteAdminModel",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
+      }
+    },
+    "/admin/route-groups": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List route groups",
+        "description": "Requires config:read or admin:read. Upstream API keys are redacted.",
+        "operationId": "listAdminRouteGroups",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Route groups keyed by route group name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/RouteGroupConfig"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
+    "/admin/route-groups/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceName"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get route group",
+        "description": "Requires config:read or admin:read. Upstream API keys are redacted.",
+        "operationId": "getAdminRouteGroup",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Route group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteGroupConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create or replace route group",
+        "description": "Requires config:write or admin:write. Endpoints are managed as part of the route group.",
+        "operationId": "upsertAdminRouteGroup",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteGroupConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete route group",
+        "description": "Requires config:write or admin:write. Deletion fails validation while models still reference the group.",
+        "operationId": "deleteAdminRouteGroup",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
+      }
+    },
+    "/admin/client-keys": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List client keys",
+        "description": "Requires config:read or admin:read. Client key values are redacted.",
+        "operationId": "listAdminClientKeys",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClientKeyConfig"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
+    "/admin/client-keys/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceName"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get client key",
+        "description": "Requires config:read or admin:read. Client key values are redacted.",
+        "operationId": "getAdminClientKey",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientKeyConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create or replace client key",
+        "description": "Requires config:write or admin:write. The key name comes from the path.",
+        "operationId": "upsertAdminClientKey",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientKeyConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete client key",
+        "description": "Requires config:write or admin:write.",
+        "operationId": "deleteAdminClientKey",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
+      }
+    },
+    "/admin/access-groups": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List access groups",
+        "description": "Requires config:read or admin:read.",
+        "operationId": "listAdminAccessGroups",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Access groups keyed by group name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/AccessGroupConfig"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
+    "/admin/access-groups/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceName"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get access group",
+        "description": "Requires config:read or admin:read.",
+        "operationId": "getAdminAccessGroup",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Access group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGroupConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create or replace access group",
+        "description": "Requires config:write or admin:write.",
+        "operationId": "upsertAdminAccessGroup",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessGroupConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete access group",
+        "description": "Requires config:write or admin:write. Deletion fails validation while client keys still reference the group.",
+        "operationId": "deleteAdminAccessGroup",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AdminStatus"
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdminError"
           }
         }
       }
@@ -989,6 +1565,15 @@
           "maximum": 100
         },
         "description": "Maximum number of breakdown items per dimension."
+      },
+      "ResourceName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Resource name. URL-encode names that contain special characters."
       }
     },
     "responses": {
@@ -1219,6 +1804,10 @@
           "status": {
             "type": "string",
             "example": "updated"
+          },
+          "persisted": {
+            "type": "string",
+            "example": "true"
           }
         }
       },

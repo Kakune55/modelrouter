@@ -111,6 +111,7 @@ func TestAdminRequiresTokenWhenConfigured(t *testing.T) {
 }
 
 func TestAdminKeyPermissions(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
 	store := router.NewStore(&config.Config{
 		Admin: config.AdminConfig{
 			Keys: []config.AdminKeyConfig{
@@ -130,7 +131,7 @@ func TestAdminKeyPermissions(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(store, metrics.NewRecorder(), "")
+	handler := NewHandler(store, metrics.NewRecorder(), configPath)
 
 	readReq := httptest.NewRequest(http.MethodGet, "/admin/metrics", nil)
 	readReq.Header.Set("Authorization", "Bearer read-token")
@@ -155,6 +156,103 @@ func TestAdminKeyPermissions(t *testing.T) {
 	handler.Config(writeResp, writeReq)
 	if writeResp.Code != http.StatusOK {
 		t.Fatalf("write status = %d body = %s", writeResp.Code, writeResp.Body.String())
+	}
+	if _, err := config.LoadFile(configPath); err != nil {
+		t.Fatalf("load persisted config: %v", err)
+	}
+}
+
+func TestAdminResourceConfigAPIs(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	store := router.NewStore(&config.Config{
+		Admin: config.AdminConfig{
+			Keys: []config.AdminKeyConfig{
+				{Name: "reader", Key: "read-token", Permissions: []string{config.AdminPermissionConfigRead}},
+				{Name: "writer", Key: "write-token", Permissions: []string{config.AdminPermissionConfigWrite}},
+			},
+		},
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "client-token-a", AccessGroup: "default"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"default": {},
+		},
+		Models: map[string]config.ModelConfig{
+			"model-a": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "endpoint", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder(), configPath)
+
+	putAdminResource(t, handler.Models, "/admin/models/model-b", `{"route_group":"group"}`)
+	putAdminResource(t, handler.Models, "/admin/models/provider%2Fmodel-c", `{"route_group":"group"}`)
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/models/model-b", nil)
+	getReq.Header.Set("Authorization", "Bearer read-token")
+	getResp := httptest.NewRecorder()
+	handler.Models(getResp, getReq)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("get model status = %d body = %s", getResp.Code, getResp.Body.String())
+	}
+
+	putAdminResource(t, handler.AccessGroups, "/admin/access-groups/premium", `{"allowed_models":["model-*"],"rate_limit":{"max_concurrency":2}}`)
+	putAdminResource(t, handler.ClientKeys, "/admin/client-keys/client-b", `{"key":"client-token-b","access_group":"premium"}`)
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/admin/access-groups/premium", nil)
+	deleteReq.Header.Set("Authorization", "Bearer write-token")
+	deleteResp := httptest.NewRecorder()
+	handler.AccessGroups(deleteResp, deleteReq)
+	if deleteResp.Code != http.StatusBadRequest {
+		t.Fatalf("delete referenced access group status = %d body = %s", deleteResp.Code, deleteResp.Body.String())
+	}
+
+	putAdminResource(t, handler.RouteGroups, "/admin/route-groups/group", `{"strategy":"round_robin","endpoints":[{"name":"endpoint","base_url":"http://127.0.0.1","api_key":"upstream-secret"}]}`)
+	routeGroupReq := httptest.NewRequest(http.MethodGet, "/admin/route-groups/group", nil)
+	routeGroupReq.Header.Set("Authorization", "Bearer read-token")
+	routeGroupResp := httptest.NewRecorder()
+	handler.RouteGroups(routeGroupResp, routeGroupReq)
+	if routeGroupResp.Code != http.StatusOK {
+		t.Fatalf("get route group status = %d body = %s", routeGroupResp.Code, routeGroupResp.Body.String())
+	}
+	if strings.Contains(routeGroupResp.Body.String(), "upstream-secret") {
+		t.Fatalf("route group response leaked api key: %s", routeGroupResp.Body.String())
+	}
+
+	cfg, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("load persisted config: %v", err)
+	}
+	if _, ok := cfg.Models["model-b"]; !ok {
+		t.Fatalf("persisted config missing model-b: %+v", cfg.Models)
+	}
+	if _, ok := cfg.Models["provider/model-c"]; !ok {
+		t.Fatalf("persisted config missing escaped model name: %+v", cfg.Models)
+	}
+	if !clientKeyExists(cfg.Auth.Keys, "client-b") {
+		t.Fatalf("persisted config missing client-b: %+v", cfg.Auth.Keys)
+	}
+	if cfg.RouteGroups["group"].Endpoints[0].APIKey != "upstream-secret" {
+		t.Fatalf("persisted route group lost api key: %+v", cfg.RouteGroups["group"])
+	}
+}
+
+func putAdminResource(t *testing.T, handler http.HandlerFunc, path string, body string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer write-token")
+	resp := httptest.NewRecorder()
+	handler(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("put %s status = %d body = %s", path, resp.Code, resp.Body.String())
 	}
 }
 
