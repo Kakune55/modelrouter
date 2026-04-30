@@ -1,4 +1,4 @@
-package main
+package openapidoc
 
 import (
 	_ "embed"
@@ -6,9 +6,9 @@ import (
 )
 
 //go:embed openapi.json
-var openAPIDocument []byte
+var document []byte
 
-func openAPIHandler() http.HandlerFunc {
+func Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
@@ -18,6 +18,6 @@ func openAPIHandler() http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(openAPIDocument)
+		_, _ = w.Write(document)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"modelrouter/internal/admin"
 	"modelrouter/internal/config"
 	"modelrouter/internal/metrics"
+	"modelrouter/internal/openapidoc"
 	"modelrouter/internal/proxy"
 	"modelrouter/internal/router"
 )
@@ -36,7 +37,7 @@ func main() {
 	mux.HandleFunc("/v1/models", proxyHandler.Models)
 	mux.HandleFunc("/v1/chat/completions", proxyHandler.ChatCompletions)
 	mux.HandleFunc("/v1/embeddings", proxyHandler.Embeddings)
-	mux.HandleFunc("/openapi.json", openAPIHandler())
+	mux.HandleFunc("/openapi.json", openapidoc.Handler())
 	mux.HandleFunc("/admin/config", adminHandler.Config)
 	mux.HandleFunc("/admin/reload", adminHandler.Reload)
 	mux.HandleFunc("/admin/overview", adminHandler.Overview)
@@ -44,6 +45,8 @@ func main() {
 	mux.HandleFunc("/admin/limits", adminHandler.Limits)
 	mux.HandleFunc("/admin/metrics", adminHandler.Metrics)
 	mux.HandleFunc("/admin/metrics/", adminHandler.Metrics)
+	mux.HandleFunc("/admin/usage", adminHandler.Usage)
+	mux.HandleFunc("/admin/usage/", adminHandler.Usage)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -200,5 +202,104 @@ func TestAdminConfigRedactsSecrets(t *testing.T) {
 		if strings.Contains(body, secret) {
 			t.Fatalf("response leaked secret %q: %s", secret, body)
 		}
+	}
+}
+
+func TestUsageReturnsHistory(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte(`{"unix_sec":100,"time":"2026-04-29T00:00:01Z","client":"client-a","model":"model-a","route_group":"group","endpoint":"endpoint","status_code":200,"total_tokens":7,"success":true}` + "\n")
+	if err := os.WriteFile(filepath.Join(dir, "usage-2026-04-29.jsonl"), body, 0o644); err != nil {
+		t.Fatalf("write usage file: %v", err)
+	}
+
+	store := router.NewStore(&config.Config{
+		UsageLog: config.UsageLogConfig{Enabled: true, Dir: dir},
+		Models: map[string]config.ModelConfig{
+			"model-a": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "endpoint", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder(), "")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage?client=client-a&limit=10", nil)
+	rr := httptest.NewRecorder()
+	handler.Usage(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Meta struct {
+			Total int `json:"total"`
+		} `json:"meta"`
+		Items []struct {
+			Client     string `json:"client"`
+			TotalToken int64  `json:"total_tokens"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Meta.Total != 1 || len(resp.Items) != 1 || resp.Items[0].Client != "client-a" || resp.Items[0].TotalToken != 7 {
+		t.Fatalf("resp = %+v", resp)
+	}
+}
+
+func TestUsageSummaryReturnsAggregate(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte(
+		`{"unix_sec":100,"time":"2026-04-29T00:00:01Z","client":"client-a","model":"model-a","route_group":"group","endpoint":"endpoint","status_code":200,"total_tokens":7,"success":true}` + "\n" +
+			`{"unix_sec":200,"time":"2026-04-29T00:00:02Z","client":"client-a","model":"model-a","route_group":"group","endpoint":"endpoint","status_code":500,"total_tokens":3,"success":false}` + "\n",
+	)
+	if err := os.WriteFile(filepath.Join(dir, "usage-2026-04-29.jsonl"), body, 0o644); err != nil {
+		t.Fatalf("write usage file: %v", err)
+	}
+
+	store := router.NewStore(&config.Config{
+		UsageLog: config.UsageLogConfig{Enabled: true, Dir: dir},
+		Models: map[string]config.ModelConfig{
+			"model-a": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "endpoint", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder(), "")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/summary?interval=minute&top=5", nil)
+	rr := httptest.NewRecorder()
+	handler.Usage(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Result struct {
+			Interval string `json:"interval"`
+			Summary  struct {
+				Requests    int64 `json:"requests"`
+				TotalTokens int64 `json:"total_tokens"`
+				Failures    int64 `json:"failures"`
+			} `json:"summary"`
+			Series []any `json:"series"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Result.Interval != "minute" || resp.Result.Summary.Requests != 2 || resp.Result.Summary.TotalTokens != 10 || resp.Result.Summary.Failures != 1 || len(resp.Result.Series) != 2 {
+		t.Fatalf("resp = %+v", resp)
 	}
 }

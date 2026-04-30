@@ -342,7 +342,7 @@ OpenAPI 文档：
 curl.exe http://localhost:8080/openapi.json
 ```
 
-该文档通过 `go:embed` 打包进二进制，部署时不需要额外携带 JSON 文件。
+该文档来自 [internal/openapidoc/openapi.json](internal/openapidoc/openapi.json)，并通过 `go:embed` 打包进二进制，部署时不需要额外携带 JSON 文件。
 
 Admin API 支持两种鉴权方式：
 
@@ -438,6 +438,27 @@ curl.exe "http://localhost:8080/admin/metrics/recent?limit=100" `
   -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
+查询历史用量日志：
+
+```powershell
+curl.exe "http://localhost:8080/admin/usage?client=default-client&model=public-model-name&from=1777392000&to=1777478400&limit=100&offset=0" `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
+```
+
+查看最近历史用量：
+
+```powershell
+curl.exe "http://localhost:8080/admin/usage/recent?limit=100" `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
+```
+
+查看历史用量聚合：
+
+```powershell
+curl.exe "http://localhost:8080/admin/usage/summary?from=1777392000&to=1777478400&interval=hour&top=10" `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
+```
+
 指标接口说明：
 
 - `/admin/overview`: 总览，包含累计 summary、最近窗口和 endpoint 健康状态。
@@ -449,6 +470,9 @@ curl.exe "http://localhost:8080/admin/metrics/recent?limit=100" `
 - `/admin/metrics/models`: 按 model 聚合。
 - `/admin/metrics/endpoints`: 按 endpoint 聚合。
 - `/admin/metrics/recent`: 最近请求事件，支持 `limit` 参数，最大 `1000`。
+- `/admin/usage`: 查询本地 JSONL 历史用量日志。
+- `/admin/usage/recent`: 查询最近历史用量日志。
+- `/admin/usage/summary`: 查询历史用量聚合，返回 summary、时间序列和 client/model/endpoint 排行。
 
 指标查询参数：
 
@@ -458,6 +482,13 @@ curl.exe "http://localhost:8080/admin/metrics/recent?limit=100" `
 - `endpoint`: 只看指定 endpoint。
 - `limit`: 返回数量，默认 `100`，最大 `1000`。
 - `offset`: 分页偏移，默认 `0`。
+
+历史用量查询额外参数：
+
+- `from`: 起始 Unix 秒，默认不限制。
+- `to`: 结束 Unix 秒，默认不限制。
+- `interval`: 聚合时间桶，支持 `minute`、`hour`、`day`，默认 `hour`。
+- `top`: 聚合排行返回数量，默认 `10`，最大 `100`。
 
 指标快照说明：
 

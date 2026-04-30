@@ -686,6 +686,174 @@
         }
       }
     },
+    "/admin/usage": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Query usage history",
+        "description": "Requires metrics:read or admin:read. Reads local usage_log JSONL files and returns matching records with latest records first.",
+        "operationId": "getAdminUsage",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientFilter"
+          },
+          {
+            "$ref": "#/components/parameters/ModelFilter"
+          },
+          {
+            "$ref": "#/components/parameters/RouteGroupFilter"
+          },
+          {
+            "$ref": "#/components/parameters/EndpointFilter"
+          },
+          {
+            "$ref": "#/components/parameters/FromUnix"
+          },
+          {
+            "$ref": "#/components/parameters/ToUnix"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage history records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageRecordsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
+    "/admin/usage/recent": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Query recent usage history",
+        "description": "Requires metrics:read or admin:read. Returns recent usage records from local usage_log JSONL files.",
+        "operationId": "getAdminUsageRecent",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientFilter"
+          },
+          {
+            "$ref": "#/components/parameters/ModelFilter"
+          },
+          {
+            "$ref": "#/components/parameters/RouteGroupFilter"
+          },
+          {
+            "$ref": "#/components/parameters/EndpointFilter"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent usage records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageRecordsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
+    "/admin/usage/summary": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Aggregate usage history",
+        "description": "Requires metrics:read or admin:read. Aggregates local usage_log JSONL records for charting.",
+        "operationId": "getAdminUsageSummary",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientFilter"
+          },
+          {
+            "$ref": "#/components/parameters/ModelFilter"
+          },
+          {
+            "$ref": "#/components/parameters/RouteGroupFilter"
+          },
+          {
+            "$ref": "#/components/parameters/EndpointFilter"
+          },
+          {
+            "$ref": "#/components/parameters/FromUnix"
+          },
+          {
+            "$ref": "#/components/parameters/ToUnix"
+          },
+          {
+            "$ref": "#/components/parameters/Interval"
+          },
+          {
+            "$ref": "#/components/parameters/Top"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregated usage history.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummaryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -776,6 +944,51 @@
           "maximum": 1000000
         },
         "description": "Pagination offset."
+      },
+      "FromUnix": {
+        "name": "from",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 0
+        },
+        "description": "Start Unix timestamp in seconds."
+      },
+      "ToUnix": {
+        "name": "to",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 0
+        },
+        "description": "End Unix timestamp in seconds."
+      },
+      "Interval": {
+        "name": "interval",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "minute",
+            "hour",
+            "day"
+          ],
+          "default": "hour"
+        },
+        "description": "Aggregation bucket interval."
+      },
+      "Top": {
+        "name": "top",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100
+        },
+        "description": "Maximum number of breakdown items per dimension."
       }
     },
     "responses": {
@@ -1391,6 +1604,154 @@
           }
         }
       },
+      "UsageRecordsResponse": {
+        "type": "object",
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/UsagePageMeta"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageRecord"
+            }
+          }
+        }
+      },
+      "UsageSummaryResponse": {
+        "type": "object",
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/UsagePageMeta"
+          },
+          "result": {
+            "$ref": "#/components/schemas/UsageAggregateResult"
+          }
+        }
+      },
+      "UsageAggregateResult": {
+        "type": "object",
+        "properties": {
+          "interval": {
+            "type": "string",
+            "enum": [
+              "minute",
+              "hour",
+              "day"
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/UsageAggregate"
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageBucket"
+            }
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/UsageBreakdown"
+          }
+        }
+      },
+      "UsageAggregate": {
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error_rate": {
+            "type": "number"
+          },
+          "bytes_out": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "average_latency_ms": {
+            "type": "number"
+          },
+          "average_end_to_end_token_rate": {
+            "type": "number"
+          },
+          "average_generation_token_rate": {
+            "type": "number"
+          },
+          "average_ttft_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "UsageBucket": {
+        "type": "object",
+        "properties": {
+          "start_unix_sec": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "end_unix_sec": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/UsageAggregate"
+          }
+        }
+      },
+      "UsageBreakdown": {
+        "type": "object",
+        "properties": {
+          "clients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageBreakdownItem"
+            }
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageBreakdownItem"
+            }
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageBreakdownItem"
+            }
+          }
+        }
+      },
+      "UsageBreakdownItem": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/UsageAggregate"
+          }
+        }
+      },
       "PageMeta": {
         "type": "object",
         "properties": {
@@ -1424,6 +1785,43 @@
             }
           }
         }
+      },
+      "UsagePageMeta": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PageMeta"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "filters": {
+                "type": "object",
+                "properties": {
+                  "client": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "route_group": {
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "type": "string"
+                  },
+                  "from": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "to": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                }
+              }
+            }
+          }
+        ]
       },
       "Summary": {
         "type": "object",
@@ -1613,6 +2011,22 @@
             "type": "string"
           }
         }
+      },
+      "UsageRecord": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventRecord"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
       },
       "EndpointHealth": {
         "type": "object",

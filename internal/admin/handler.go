@@ -11,6 +11,7 @@ import (
 	"modelrouter/internal/config"
 	"modelrouter/internal/metrics"
 	"modelrouter/internal/router"
+	"modelrouter/internal/usage"
 )
 
 type ClientLimitProvider interface {
@@ -167,6 +168,45 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r, config.AdminPermissionMetricsRead) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/admin/usage")
+	switch path {
+	case "", "/", "/recent", "/summary":
+	default:
+		writeAdminError(w, http.StatusNotFound, "not found")
+		return
+	}
+	query := usageQueryFromRequest(r)
+	if path == "/summary" {
+		result, err := usage.AggregateRecords(h.store.Get().Config.UsageLog, query, r.URL.Query().Get("interval"), boundedInt(r.URL.Query().Get("top"), 10, 1, 100))
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"meta":   usagePageMeta(0, query, 0),
+			"result": result,
+		})
+		return
+	}
+	result, err := usage.QueryRecords(h.store.Get().Config.UsageLog, query)
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"meta":  usagePageMeta(result.Total, query, len(result.Items)),
+		"items": result.Items,
+	})
+}
+
 type metricsQuery struct {
 	Client     string `json:"client,omitempty"`
 	Model      string `json:"model,omitempty"`
@@ -174,6 +214,24 @@ type metricsQuery struct {
 	Endpoint   string `json:"endpoint,omitempty"`
 	Limit      int    `json:"limit"`
 	Offset     int    `json:"offset"`
+}
+
+func usageQueryFromRequest(r *http.Request) usage.Query {
+	values := r.URL.Query()
+	limitDefault := 100
+	if strings.TrimPrefix(r.URL.Path, "/admin/usage") == "/recent" {
+		limitDefault = 100
+	}
+	return usage.Query{
+		Client:     values.Get("client"),
+		Model:      values.Get("model"),
+		RouteGroup: values.Get("route_group"),
+		Endpoint:   values.Get("endpoint"),
+		FromUnix:   boundedInt64(values.Get("from"), 0, 0),
+		ToUnix:     boundedInt64(values.Get("to"), 0, 0),
+		Limit:      boundedInt(values.Get("limit"), limitDefault, 0, 1000),
+		Offset:     boundedInt(values.Get("offset"), 0, 0, 1_000_000),
+	}
 }
 
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, permission string) bool {
@@ -326,6 +384,20 @@ func boundedInt(raw string, fallback, min, max int) int {
 	return parsed
 }
 
+func boundedInt64(raw string, fallback, min int64) int64 {
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	if parsed < min {
+		return min
+	}
+	return parsed
+}
+
 func filterCounters(items []metrics.Counter, query metricsQuery) []metrics.Counter {
 	out := make([]metrics.Counter, 0, len(items))
 	for _, item := range items {
@@ -398,6 +470,23 @@ func pageMeta(total int, query metricsQuery, returned int) map[string]any {
 			"model":       query.Model,
 			"route_group": query.RouteGroup,
 			"endpoint":    query.Endpoint,
+		},
+	}
+}
+
+func usagePageMeta(total int, query usage.Query, returned int) map[string]any {
+	return map[string]any{
+		"total":    total,
+		"returned": returned,
+		"limit":    query.Limit,
+		"offset":   query.Offset,
+		"filters": map[string]any{
+			"client":      query.Client,
+			"model":       query.Model,
+			"route_group": query.RouteGroup,
+			"endpoint":    query.Endpoint,
+			"from":        query.FromUnix,
+			"to":          query.ToUnix,
 		},
 	}
 }

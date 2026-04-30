@@ -1,4 +1,4 @@
-package main
+package openapidoc
 
 import (
 	"encoding/json"
@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-func TestOpenAPIHandlerServesDocument(t *testing.T) {
+func TestHandlerServesDocument(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
 	rr := httptest.NewRecorder()
 
-	openAPIHandler()(rr, req)
+	Handler()(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
@@ -30,12 +30,11 @@ func TestOpenAPIHandlerServesDocument(t *testing.T) {
 	}
 }
 
-func TestOpenAPIHandlerRejectsUnsupportedMethod(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
-	req.Method = http.MethodPost
+func TestHandlerRejectsUnsupportedMethod(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/openapi.json", nil)
 	rr := httptest.NewRecorder()
 
-	openAPIHandler()(rr, req)
+	Handler()(rr, req)
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
