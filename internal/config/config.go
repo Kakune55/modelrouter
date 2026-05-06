@@ -175,7 +175,6 @@ func SaveFile(path string, cfg *Config) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	_ = os.Remove(path)
 	if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}

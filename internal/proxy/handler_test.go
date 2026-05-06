@@ -643,6 +643,42 @@ func TestModelsFiltersByAPIKey(t *testing.T) {
 	}
 }
 
+func TestModelsRejectsInvalidAPIKey(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client", Key: "secret", AccessGroup: "group-a"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {AllowedModels: []string{"demo"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "upstream", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+	rr := httptest.NewRecorder()
+
+	handler.Models(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestModelsExcludesBlockedModels(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Auth: config.AuthConfig{

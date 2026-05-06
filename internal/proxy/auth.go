@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -26,7 +27,7 @@ func (h *Handler) authenticate(r *http.Request) (clientIdentity, bool) {
 		return clientIdentity{}, false
 	}
 	for _, key := range cfg.Auth.Keys {
-		if token != key.Key {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(key.Key)) != 1 {
 			continue
 		}
 		identity := clientIdentity{
