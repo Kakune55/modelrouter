@@ -51,6 +51,28 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsWeightedStrategies(t *testing.T) {
+	for _, strategy := range []string{StrategyWeightedRoundRobin, StrategyWeightedRandom} {
+		cfg := &Config{
+			Models: map[string]ModelConfig{
+				"demo": {RouteGroup: "group"},
+			},
+			RouteGroups: map[string]RouteGroupConfig{
+				"group": {
+					Strategy: strategy,
+					Endpoints: []EndpointConfig{
+						{Name: "ep", BaseURL: "http://localhost:8081", Weight: 2},
+					},
+				},
+			},
+		}
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() strategy %q error = %v", strategy, err)
+		}
+	}
+}
+
 func TestSaveFileWritesLoadableConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := &Config{

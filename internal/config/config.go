@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	StrategyRoundRobin     = "round_robin"
-	StrategyRandom         = "random"
-	StrategyIPHash         = "ip_hash"
-	StrategyFirstAvailable = "first_available"
+	StrategyRoundRobin         = "round_robin"
+	StrategyRandom             = "random"
+	StrategyWeightedRoundRobin = "weighted_round_robin"
+	StrategyWeightedRandom     = "weighted_random"
+	StrategyIPHash             = "ip_hash"
+	StrategyFirstAvailable     = "first_available"
 
 	AdminPermissionAll         = "admin:*"
 	AdminPermissionRead        = "admin:read"
@@ -377,7 +379,7 @@ func (c *Config) Timeout() time.Duration {
 
 func validStrategy(strategy string) bool {
 	switch strategy {
-	case StrategyRoundRobin, StrategyRandom, StrategyIPHash, StrategyFirstAvailable:
+	case StrategyRoundRobin, StrategyRandom, StrategyWeightedRoundRobin, StrategyWeightedRandom, StrategyIPHash, StrategyFirstAvailable:
 		return true
 	default:
 		return false

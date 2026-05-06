@@ -2028,6 +2028,8 @@
             "enum": [
               "round_robin",
               "random",
+              "weighted_round_robin",
+              "weighted_random",
               "ip_hash",
               "first_available"
             ]
@@ -2088,7 +2090,8 @@
           },
           "weight": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Traffic weight used by weighted_round_robin and weighted_random. Values <= 0 are treated as 1."
           },
           "max_concurrency": {
             "type": "integer",

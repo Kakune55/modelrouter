@@ -64,6 +64,98 @@ func TestIPHashStableForSameIP(t *testing.T) {
 	}
 }
 
+func TestWeightedRoundRobinUsesEndpointWeights(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyWeightedRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "a", BaseURL: "http://a", Weight: 2},
+					{Name: "b", BaseURL: "http://b", Weight: 1},
+				},
+			},
+		},
+	})
+
+	counts := map[string]int{}
+	for i := 0; i < 6; i++ {
+		route, err := store.Get().Pick("demo", "127.0.0.1")
+		if err != nil {
+			t.Fatalf("Pick() error = %v", err)
+		}
+		counts[route.Endpoint.Name]++
+	}
+
+	if counts["a"] != 4 || counts["b"] != 2 {
+		t.Fatalf("counts = %+v", counts)
+	}
+}
+
+func TestWeightedRoundRobinDeduplicatesFallbackCandidates(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyWeightedRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "a", BaseURL: "http://a", Weight: 3},
+					{Name: "b", BaseURL: "http://b", Weight: 1},
+				},
+			},
+		},
+	})
+
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	candidates := route.Candidates()
+	if len(candidates) != 2 {
+		t.Fatalf("candidate count = %d, candidates = %+v", len(candidates), candidates)
+	}
+	if candidates[0].Name == candidates[1].Name {
+		t.Fatalf("duplicate fallback candidate: %+v", candidates)
+	}
+}
+
+func TestWeightedRandomReturnsAllCandidatesOnce(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyWeightedRandom,
+				Endpoints: []config.EndpointConfig{
+					{Name: "a", BaseURL: "http://a", Weight: 2},
+					{Name: "b", BaseURL: "http://b", Weight: 1},
+					{Name: "c", BaseURL: "http://c", Weight: 1},
+				},
+			},
+		},
+	})
+
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	seen := map[string]bool{}
+	for _, endpoint := range route.Candidates() {
+		if seen[endpoint.Name] {
+			t.Fatalf("duplicate candidate %q in %+v", endpoint.Name, route.Candidates())
+		}
+		seen[endpoint.Name] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("seen = %+v", seen)
+	}
+}
+
 func TestPassiveHealthSkipsCoolingEndpoint(t *testing.T) {
 	store := NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{

@@ -76,16 +76,14 @@
           "headers": {
             "X-Provider-Project": "replace-with-project-id"
           },
-          "max_concurrency": 8,
-          "weight": 1
+          "max_concurrency": 8
         },
         {
           "name": "backup-upstream",
           "model": "provider-b/model-id",
           "base_url": "http://backup-upstream.example.com/v1",
           "api_key": "replace-with-backup-api-key",
-          "max_concurrency": 4,
-          "weight": 1
+          "max_concurrency": 4
         }
       ]
     }

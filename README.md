@@ -9,7 +9,7 @@
 - 按请求里的 `model` 字段路由
 - 一个公开模型名可以绑定一个 route group
 - 一个 route group 可以配置多个上游 endpoint
-- 支持负载均衡策略：`round_robin`、`random`、`ip_hash`、`first_available`
+- 支持负载均衡策略：`round_robin`、`random`、`weighted_round_robin`、`weighted_random`、`ip_hash`、`first_available`
 - 支持 endpoint 级别的上游模型名映射
 - 支持被动健康检查和失败冷却，不主动消耗 token 探测
 - 支持通过 Admin API 热更新配置
@@ -116,16 +116,14 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
           "headers": {
             "X-Provider-Project": "replace-with-project-id"
           },
-          "max_concurrency": 8,
-          "weight": 1
+          "max_concurrency": 8
         },
         {
           "name": "backup-upstream",
           "model": "provider-b/model-id",
           "base_url": "http://backup-upstream.example.com/v1",
           "api_key": "replace-with-backup-api-key",
-          "max_concurrency": 4,
-          "weight": 1
+          "max_concurrency": 4
         }
       ]
     }
@@ -160,6 +158,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 - `endpoints[].api_key`: 当前 endpoint 使用的上游 API key。
 - `endpoints[].headers`: 发往当前 endpoint 的固定请求头，适合供应商项目 ID、组织 ID 等额外鉴权或路由参数。
 - `endpoints[].max_concurrency`: 当前 endpoint 最大并发数。小于等于 `0` 表示不限制。
+- `endpoints[].weight`: 当前 endpoint 在 `weighted_round_robin` 或 `weighted_random` 策略下的流量权重。小于等于 `0` 时按 `1` 处理。
 - `passive_health.failure_threshold`: 连续失败多少次后进入冷却。
 - `passive_health.cooldown_seconds`: 冷却时间，冷却期间该 endpoint 会被跳过。
 
@@ -291,10 +290,14 @@ Authorization: Bearer <token>
 
 - `round_robin`: 轮询选择 endpoint。
 - `random`: 随机选择 endpoint。
+- `weighted_round_robin`: 按 endpoint `weight` 做平滑加权轮询。
+- `weighted_random`: 按 endpoint `weight` 做加权随机选择。
 - `ip_hash`: 按客户端 IP 固定选择 endpoint。
 - `first_available`: 优先使用第一个可用 endpoint，失败时尝试后续 endpoint。
 
 `first_available` 适合主备模式。配合 `passive_health` 后，失败 endpoint 会被临时跳过，冷却结束后自动恢复参与路由。
+
+`weight` 只影响 `weighted_round_robin` 和 `weighted_random`。一次请求内的 fallback 候选 endpoint 仍会去重，避免同一个上游在一次失败重试链路里被重复尝试。
 
 非流式请求在上游连接失败、读取失败、返回 `429` 或 `5xx` 时会尝试后续 endpoint。流式请求一旦已经开始向客户端输出，就不会再切换 endpoint。
 
@@ -613,4 +616,3 @@ usage_logs/usage-2026-04-29.jsonl
 - 正在处理中的请求会继续使用它开始时拿到的配置快照。
 - `PUT /admin/config` 会先校验并写回启动时指定的配置文件，写入成功后再切换内存配置。
 - 代码变更需要重启服务才会生效。
-- `weight` 字段暂时保留，当前版本还没有实现加权策略。
