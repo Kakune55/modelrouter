@@ -581,6 +581,19 @@ func TestStreamingDetectsReasoningContentAsFirstToken(t *testing.T) {
 	}
 }
 
+func TestStreamingParsesMultiLineSSEDataEvent(t *testing.T) {
+	event := parseSSEEvent([]byte("event: message\n" +
+		"data: {\"choices\":[{\"delta\":{\n" +
+		"data: \"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}\n"))
+
+	if !event.HasContent {
+		t.Fatal("expected multiline SSE data to count as generated text")
+	}
+	if !event.HasUsage || event.Usage.TotalTokens != 5 {
+		t.Fatalf("usage = %+v hasUsage=%v", event.Usage, event.HasUsage)
+	}
+}
+
 func TestChatCompletionsRejectsUnknownModel(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{

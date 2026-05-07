@@ -185,7 +185,7 @@ func TestPassiveHealthSkipsCoolingEndpoint(t *testing.T) {
 		t.Fatalf("first endpoint = %s", first.Endpoint.Name)
 	}
 
-	first.MarkFailure("a")
+	first.MarkFailure("a", 502, nil)
 
 	second, err := store.Get().Pick("demo", "127.0.0.1")
 	if err != nil {
@@ -220,10 +220,49 @@ func TestPassiveHealthReturnsErrorWhenAllEndpointsCooling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pick() error = %v", err)
 	}
-	route.MarkFailure("a")
+	route.MarkFailure("a", 502, nil)
 
 	if _, err := store.Get().Pick("demo", "127.0.0.1"); err == nil {
 		t.Fatal("expected no available endpoint error")
+	}
+}
+
+func TestHealthIncludesRecentEndpointStatus(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "a", BaseURL: "http://a"},
+				},
+			},
+		},
+	})
+
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	route.MarkFailure("a", 503, nil)
+
+	health := store.Get().Health()
+	if len(health) != 1 {
+		t.Fatalf("health = %+v", health)
+	}
+	if health[0].LastStatusCode != 503 {
+		t.Fatalf("last status = %d", health[0].LastStatusCode)
+	}
+	if health[0].LastError == "" || health[0].LastErrorUnix == 0 || health[0].LastFailureUnix == 0 {
+		t.Fatalf("health item missing recent error fields: %+v", health[0])
+	}
+
+	route.MarkSuccess("a", 200)
+	health = store.Get().Health()
+	if health[0].LastStatusCode != 200 || health[0].LastSuccessUnix == 0 {
+		t.Fatalf("health item missing success fields: %+v", health[0])
 	}
 }
 

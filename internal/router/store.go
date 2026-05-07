@@ -42,6 +42,9 @@ type endpointState struct {
 	cooldownUntil       time.Time
 	lastFailure         time.Time
 	lastSuccess         time.Time
+	lastStatusCode      int
+	lastError           string
+	lastErrorAt         time.Time
 	inflight            int
 }
 
@@ -144,12 +147,12 @@ func (r *Route) Candidates() []config.EndpointConfig {
 	return out
 }
 
-func (r *Route) MarkSuccess(endpointName string) {
-	r.group.markSuccess(endpointName, time.Now())
+func (r *Route) MarkSuccess(endpointName string, statusCode int) {
+	r.group.markSuccess(endpointName, statusCode, time.Now())
 }
 
-func (r *Route) MarkFailure(endpointName string) {
-	r.group.markFailure(endpointName, time.Now())
+func (r *Route) MarkFailure(endpointName string, statusCode int, err error) {
+	r.group.markFailure(endpointName, statusCode, err, time.Now())
 }
 
 func (r *Route) TryAcquire(endpointName string) bool {
@@ -170,10 +173,7 @@ func (g *GroupRuntime) isCooling(idx int, now time.Time) bool {
 	return now.Before(state.cooldownUntil)
 }
 
-func (g *GroupRuntime) markSuccess(endpointName string, now time.Time) {
-	if !g.health.enabled {
-		return
-	}
+func (g *GroupRuntime) markSuccess(endpointName string, statusCode int, now time.Time) {
 	idx := g.endpointIndex(endpointName)
 	if idx < 0 {
 		return
@@ -183,12 +183,12 @@ func (g *GroupRuntime) markSuccess(endpointName string, now time.Time) {
 	defer state.mu.Unlock()
 	state.consecutiveFailures = 0
 	state.lastSuccess = now
+	if statusCode > 0 {
+		state.lastStatusCode = statusCode
+	}
 }
 
-func (g *GroupRuntime) markFailure(endpointName string, now time.Time) {
-	if !g.health.enabled {
-		return
-	}
+func (g *GroupRuntime) markFailure(endpointName string, statusCode int, err error, now time.Time) {
 	idx := g.endpointIndex(endpointName)
 	if idx < 0 {
 		return
@@ -196,12 +196,30 @@ func (g *GroupRuntime) markFailure(endpointName string, now time.Time) {
 	state := &g.endpointState[idx]
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.consecutiveFailures++
+	if statusCode > 0 {
+		state.lastStatusCode = statusCode
+	}
+	state.lastError = failureMessage(statusCode, err)
+	state.lastErrorAt = now
 	state.lastFailure = now
+	if !g.health.enabled {
+		return
+	}
+	state.consecutiveFailures++
 	if state.consecutiveFailures >= g.health.failureThreshold {
 		state.cooldownUntil = now.Add(g.health.cooldown)
 		state.consecutiveFailures = 0
 	}
+}
+
+func failureMessage(statusCode int, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	if statusCode > 0 {
+		return fmt.Sprintf("upstream returned status %d", statusCode)
+	}
+	return "upstream request failed"
 }
 
 func (g *GroupRuntime) tryAcquire(endpointName string) bool {
@@ -253,6 +271,9 @@ type EndpointHealth struct {
 	Cooling             bool   `json:"cooling"`
 	CooldownUntilUnix   int64  `json:"cooldown_until_unix_sec,omitempty"`
 	ConsecutiveFailures int    `json:"consecutive_failures"`
+	LastStatusCode      int    `json:"last_status_code,omitempty"`
+	LastError           string `json:"last_error,omitempty"`
+	LastErrorUnix       int64  `json:"last_error_unix_sec,omitempty"`
 	LastFailureUnix     int64  `json:"last_failure_unix_sec,omitempty"`
 	LastSuccessUnix     int64  `json:"last_success_unix_sec,omitempty"`
 	MaxConcurrency      int    `json:"max_concurrency,omitempty"`
@@ -276,8 +297,13 @@ func (s *Snapshot) Health() []EndpointHealth {
 				state.mu.RLock()
 				item.ConsecutiveFailures = state.consecutiveFailures
 				item.Cooling = group.health.enabled && now.Before(state.cooldownUntil)
+				item.LastStatusCode = state.lastStatusCode
+				item.LastError = state.lastError
 				if !state.cooldownUntil.IsZero() {
 					item.CooldownUntilUnix = state.cooldownUntil.Unix()
+				}
+				if !state.lastErrorAt.IsZero() {
+					item.LastErrorUnix = state.lastErrorAt.Unix()
 				}
 				if !state.lastFailure.IsZero() {
 					item.LastFailureUnix = state.lastFailure.Unix()

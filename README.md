@@ -432,6 +432,8 @@ curl.exe http://localhost:8080/admin/health `
   -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
+健康状态包含最近上游状态码、最近错误摘要、最近失败时间、最近成功时间、冷却状态和当前并发数，便于区分 timeout、上游 `429`、`5xx` 等问题。
+
 查看 client 限流状态：
 
 ```powershell
@@ -573,7 +575,7 @@ curl.exe "http://localhost:8080/admin/usage/summary?from=1777392000&to=177747840
 Token 速率统计：
 
 - 非流式响应会从最终 JSON 的 `usage` 字段读取 token。
-- 流式响应会从 SSE `data:` 事件里的 `usage` 字段读取 token。
+- 流式响应会从 SSE `data:` 事件里的 `usage` 字段读取 token，支持按 SSE 事件聚合多行 `data:`。
 - 打开 `features.auto_include_stream_usage` 后，代理会对 `stream: true` 请求自动补充 `stream_options.include_usage=true`。
 - 如果上游不支持或不返回 usage，token 指标仍会是 `0`，但请求数、延迟、字节吞吐仍会正常统计。
 - `average_end_to_end_token_rate` 表示端到端速率，按 `output_tokens / 总请求耗时` 计算，包含排队、prompt 处理、首 token 延迟和网络传输。

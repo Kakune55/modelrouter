@@ -2652,6 +2652,16 @@
           "consecutive_failures": {
             "type": "integer"
           },
+          "last_status_code": {
+            "type": "integer"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_error_unix_sec": {
+            "type": "integer",
+            "format": "int64"
+          },
           "last_failure_unix_sec": {
             "type": "integer",
             "format": "int64"

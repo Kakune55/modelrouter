@@ -179,7 +179,11 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 		resp, err := h.forward(w, r, upstreamBody, timeout, maxResponseBodyBytes, endpoint, upstreamPath)
 		route.Release(endpoint.Name)
 		if err != nil {
-			route.MarkFailure(endpoint.Name)
+			statusCode := 0
+			if resp != nil {
+				statusCode = resp.StatusCode
+			}
+			route.MarkFailure(endpoint.Name, statusCode, err)
 			if resp != nil && resp.Stats.ResponseStarted {
 				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, err
 			}
@@ -187,7 +191,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			continue
 		}
 		if endpointFailureStatus(resp.StatusCode) {
-			route.MarkFailure(endpoint.Name)
+			route.MarkFailure(endpoint.Name, resp.StatusCode, nil)
 			if resp.Stats.ResponseStarted {
 				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, nil
 			}
@@ -195,7 +199,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			lastEndpoint = endpoint
 			continue
 		} else {
-			route.MarkSuccess(endpoint.Name)
+			route.MarkSuccess(endpoint.Name, resp.StatusCode)
 		}
 		if !resp.Stats.ResponseStarted {
 			bytesOut, err := writeBufferedResponse(w, resp)

@@ -65,9 +65,8 @@ func copyStreaming(w http.ResponseWriter, r io.Reader, started time.Time) (int64
 	var stats streamStats
 	var firstContent time.Time
 	var lastContent time.Time
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		event := parseSSEEvent(line)
+	var eventLines [][]byte
+	observe := func(event sseEvent) {
 		if event.HasUsage {
 			stats.Usage = event.Usage
 		}
@@ -82,6 +81,17 @@ func copyStreaming(w http.ResponseWriter, r io.Reader, started time.Time) (int64
 		if event.Done && !firstContent.IsZero() {
 			lastContent = now
 		}
+	}
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		if len(bytes.TrimSpace(line)) == 0 {
+			if len(eventLines) > 0 {
+				observe(parseSSEEvent(bytes.Join(eventLines, []byte{'\n'})))
+				eventLines = eventLines[:0]
+			}
+		} else {
+			eventLines = append(eventLines, line)
+		}
 		written, err := w.Write(append(append([]byte(nil), line...), '\n'))
 		total += int64(written)
 		if flusher != nil {
@@ -93,6 +103,9 @@ func copyStreaming(w http.ResponseWriter, r io.Reader, started time.Time) (int64
 	}
 	if err := scanner.Err(); err != nil {
 		return total, stats, err
+	}
+	if len(eventLines) > 0 {
+		observe(parseSSEEvent(bytes.Join(eventLines, []byte{'\n'})))
 	}
 	if !firstContent.IsZero() && !lastContent.IsZero() && lastContent.After(firstContent) {
 		stats.GenerationDuration = lastContent.Sub(firstContent)
@@ -108,11 +121,11 @@ type sseEvent struct {
 }
 
 func parseSSEEvent(line []byte) sseEvent {
-	line = bytes.TrimSpace(line)
-	if !bytes.HasPrefix(line, []byte("data:")) {
+	data := sseEventData(line)
+	if len(data) == 0 {
 		return sseEvent{}
 	}
-	data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+	data = bytes.TrimSpace(data)
 	if bytes.Equal(data, []byte("[DONE]")) {
 		return sseEvent{Done: true}
 	}
@@ -145,6 +158,23 @@ func parseSSEEvent(line []byte) sseEvent {
 		}
 	}
 	return event
+}
+
+func sseEventData(event []byte) []byte {
+	lines := bytes.Split(event, []byte{'\n'})
+	dataLines := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimPrefix(line, []byte("data:"))
+		if len(data) > 0 && data[0] == ' ' {
+			data = data[1:]
+		}
+		dataLines = append(dataLines, data)
+	}
+	return bytes.Join(dataLines, []byte{'\n'})
 }
 
 func hasGeneratedText(value any) bool {
