@@ -77,6 +77,70 @@ func TestMetricsFiltersAndPaginates(t *testing.T) {
 	}
 }
 
+func TestPrometheusMetricsUsesAdminAuthAndTextFormat(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Admin: config.AdminConfig{Keys: []config.AdminKeyConfig{
+			{Name: "prometheus", Key: "metrics-token", Permissions: []string{config.AdminPermissionMetricsRead}},
+		}},
+		Models: map[string]config.ModelConfig{
+			`model-"a"`: {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{Name: "endpoint", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	recorder := metrics.NewRecorder()
+	recorder.Record(metrics.Event{
+		Client:       `client\a`,
+		Model:        `model-"a"`,
+		RouteGroup:   "group",
+		Endpoint:     "endpoint",
+		StatusCode:   200,
+		Duration:     time.Millisecond,
+		BytesOut:     12,
+		PromptTokens: 2,
+		OutputTokens: 3,
+		TotalTokens:  5,
+	})
+	handler := NewHandler(store, recorder, "")
+
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	unauthorized := httptest.NewRecorder()
+	handler.Prometheus(unauthorized, unauthorizedReq)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d body = %s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer metrics-token")
+	rr := httptest.NewRecorder()
+	handler.Prometheus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "text/plain") {
+		t.Fatalf("content-type = %q", got)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"# TYPE modelrouter_requests_total counter",
+		"modelrouter_requests_total 1",
+		`modelrouter_route_requests_total{client="client\\a",model="model-\"a\"",route_group="group",endpoint="endpoint"} 1`,
+		`modelrouter_route_status_codes_total{client="client\\a",model="model-\"a\"",route_group="group",endpoint="endpoint",status_code="200"} 1`,
+		`modelrouter_endpoint_inflight{route_group="group",endpoint="endpoint",model=""} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("prometheus body missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestAdminRequiresTokenWhenConfigured(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Admin: config.AdminConfig{Token: "admin-token"},

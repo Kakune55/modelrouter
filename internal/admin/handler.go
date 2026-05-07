@@ -3,9 +3,11 @@ package admin
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -418,6 +420,18 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) Prometheus(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r, config.AdminPermissionMetricsRead) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write([]byte(prometheusMetrics(h.recorder.Snapshot(), h.store.Get().Health())))
+}
+
 func (h *Handler) Usage(w http.ResponseWriter, r *http.Request) {
 	if !h.authorize(w, r, config.AdminPermissionMetricsRead) {
 		return
@@ -714,6 +728,106 @@ func limitRecent(items []metrics.EventRecord, limit int) []metrics.EventRecord {
 		return items
 	}
 	return items[len(items)-limit:]
+}
+
+func prometheusMetrics(snapshot metrics.Snapshot, health []router.EndpointHealth) string {
+	var b strings.Builder
+	headers := map[string]struct{}{}
+	writePrometheusMetric(&b, headers, "modelrouter_requests_total", "counter", "Total proxied requests.", nil, float64(snapshot.Summary.Requests))
+	writePrometheusMetric(&b, headers, "modelrouter_successes_total", "counter", "Total successful proxied requests.", nil, float64(snapshot.Summary.Successes))
+	writePrometheusMetric(&b, headers, "modelrouter_failures_total", "counter", "Total failed proxied requests.", nil, float64(snapshot.Summary.Failures))
+	writePrometheusMetric(&b, headers, "modelrouter_bytes_out_total", "counter", "Total response bytes written to clients.", nil, float64(snapshot.Summary.BytesOut))
+	writePrometheusMetric(&b, headers, "modelrouter_prompt_tokens_total", "counter", "Total prompt tokens reported by upstreams.", nil, float64(snapshot.Summary.PromptTokens))
+	writePrometheusMetric(&b, headers, "modelrouter_output_tokens_total", "counter", "Total output tokens reported by upstreams.", nil, float64(snapshot.Summary.OutputTokens))
+	writePrometheusMetric(&b, headers, "modelrouter_tokens_total", "counter", "Total tokens reported by upstreams.", nil, float64(snapshot.Summary.TotalTokens))
+	writePrometheusMetric(&b, headers, "modelrouter_average_latency_ms", "gauge", "Average proxied request latency in milliseconds.", nil, snapshot.Summary.AverageLatencyMS)
+	writePrometheusMetric(&b, headers, "modelrouter_error_rate", "gauge", "Overall proxied request error rate.", nil, snapshot.Summary.ErrorRate)
+
+	for _, item := range snapshot.Items {
+		labels := prometheusCounterLabels(item)
+		writePrometheusMetric(&b, headers, "modelrouter_route_requests_total", "counter", "Total proxied requests by client, model, route group, and endpoint.", labels, float64(item.Requests))
+		writePrometheusMetric(&b, headers, "modelrouter_route_successes_total", "counter", "Successful proxied requests by client, model, route group, and endpoint.", labels, float64(item.Successes))
+		writePrometheusMetric(&b, headers, "modelrouter_route_failures_total", "counter", "Failed proxied requests by client, model, route group, and endpoint.", labels, float64(item.Failures))
+		writePrometheusMetric(&b, headers, "modelrouter_route_bytes_out_total", "counter", "Response bytes by client, model, route group, and endpoint.", labels, float64(item.BytesOut))
+		writePrometheusMetric(&b, headers, "modelrouter_route_prompt_tokens_total", "counter", "Prompt tokens by client, model, route group, and endpoint.", labels, float64(item.PromptTokens))
+		writePrometheusMetric(&b, headers, "modelrouter_route_output_tokens_total", "counter", "Output tokens by client, model, route group, and endpoint.", labels, float64(item.OutputTokens))
+		writePrometheusMetric(&b, headers, "modelrouter_route_tokens_total", "counter", "Total tokens by client, model, route group, and endpoint.", labels, float64(item.TotalTokens))
+		writePrometheusMetric(&b, headers, "modelrouter_route_average_latency_ms", "gauge", "Average request latency by client, model, route group, and endpoint.", labels, item.AverageLatencyMS)
+		writePrometheusMetric(&b, headers, "modelrouter_route_error_rate", "gauge", "Error rate by client, model, route group, and endpoint.", labels, item.ErrorRate)
+
+		statusCodes := make([]int, 0, len(item.StatusCodes))
+		for statusCode := range item.StatusCodes {
+			statusCodes = append(statusCodes, statusCode)
+		}
+		sort.Ints(statusCodes)
+		for _, statusCode := range statusCodes {
+			statusLabels := append([]prometheusLabel(nil), labels...)
+			statusLabels = append(statusLabels, prometheusLabel{Name: "status_code", Value: strconv.Itoa(statusCode)})
+			writePrometheusMetric(&b, headers, "modelrouter_route_status_codes_total", "counter", "Response status codes by client, model, route group, endpoint, and status code.", statusLabels, float64(item.StatusCodes[statusCode]))
+		}
+	}
+
+	for _, item := range health {
+		labels := []prometheusLabel{
+			{Name: "route_group", Value: item.RouteGroup},
+			{Name: "endpoint", Value: item.Endpoint},
+			{Name: "model", Value: item.Model},
+		}
+		writePrometheusMetric(&b, headers, "modelrouter_endpoint_cooling", "gauge", "Whether an endpoint is currently cooling down.", labels, boolFloat(item.Cooling))
+		writePrometheusMetric(&b, headers, "modelrouter_endpoint_consecutive_failures", "gauge", "Endpoint consecutive failure count.", labels, float64(item.ConsecutiveFailures))
+		writePrometheusMetric(&b, headers, "modelrouter_endpoint_inflight", "gauge", "Current endpoint in-flight request count.", labels, float64(item.Inflight))
+		writePrometheusMetric(&b, headers, "modelrouter_endpoint_max_concurrency", "gauge", "Configured endpoint max concurrency.", labels, float64(item.MaxConcurrency))
+		writePrometheusMetric(&b, headers, "modelrouter_endpoint_last_status_code", "gauge", "Most recent upstream status code observed for an endpoint.", labels, float64(item.LastStatusCode))
+	}
+	return b.String()
+}
+
+type prometheusLabel struct {
+	Name  string
+	Value string
+}
+
+func prometheusCounterLabels(item metrics.Counter) []prometheusLabel {
+	return []prometheusLabel{
+		{Name: "client", Value: item.Client},
+		{Name: "model", Value: item.Model},
+		{Name: "route_group", Value: item.RouteGroup},
+		{Name: "endpoint", Value: item.Endpoint},
+	}
+}
+
+func writePrometheusMetric(b *strings.Builder, headers map[string]struct{}, name, metricType, help string, labels []prometheusLabel, value float64) {
+	if _, ok := headers[name]; !ok {
+		fmt.Fprintf(b, "# HELP %s %s\n", name, help)
+		fmt.Fprintf(b, "# TYPE %s %s\n", name, metricType)
+		headers[name] = struct{}{}
+	}
+	fmt.Fprintf(b, "%s%s %g\n", name, prometheusLabels(labels), value)
+}
+
+func prometheusLabels(labels []prometheusLabel) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(labels))
+	for _, label := range labels {
+		parts = append(parts, label.Name+`="`+prometheusEscape(label.Value)+`"`)
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+func prometheusEscape(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return value
+}
+
+func boolFloat(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func pageMeta(total int, query metricsQuery, returned int) map[string]any {

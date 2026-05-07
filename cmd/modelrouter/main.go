@@ -38,6 +38,7 @@ func main() {
 	mux.HandleFunc("/v1/chat/completions", proxyHandler.ChatCompletions)
 	mux.HandleFunc("/v1/embeddings", proxyHandler.Embeddings)
 	mux.HandleFunc("/openapi.json", openapidoc.Handler())
+	mux.HandleFunc("/metrics", adminHandler.Prometheus)
 	mux.HandleFunc("/admin/config", adminHandler.Config)
 	mux.HandleFunc("/admin/models", adminHandler.Models)
 	mux.HandleFunc("/admin/models/", adminHandler.Models)

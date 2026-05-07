@@ -362,7 +362,7 @@ Admin API 支持两种鉴权方式：
 - `admin:write`: 写接口，目前等价于配置更新和 reload。
 - `config:read`: `GET /admin/config`、资源级配置读取接口。
 - `config:write`: `PUT /admin/config`、`POST /admin/reload`、资源级配置写入接口。
-- `metrics:read`: `/admin/metrics` 和子路径。
+- `metrics:read`: `/admin/metrics` 和子路径、`/metrics`。
 - `health:read`: `/admin/health`。
 - `limits:read`: `/admin/limits`。
 
@@ -448,6 +448,15 @@ curl.exe http://localhost:8080/admin/metrics `
   -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
+Prometheus 指标：
+
+```powershell
+curl.exe http://localhost:8080/metrics `
+  -H "Authorization: Bearer mr-replace-with-admin-token"
+```
+
+`/metrics` 输出 Prometheus text format，使用 Admin API 的 `metrics:read`、`admin:read` 或 `admin:*` 权限。
+
 按条件查询明细指标：
 
 ```powershell
@@ -505,6 +514,7 @@ curl.exe "http://localhost:8080/admin/usage/summary?from=1777392000&to=177747840
 - `/admin/metrics/models`: 按 model 聚合。
 - `/admin/metrics/endpoints`: 按 endpoint 聚合。
 - `/admin/metrics/recent`: 最近请求事件，支持 `limit` 参数，最大 `1000`。
+- `/metrics`: Prometheus text format 指标。
 - `/admin/usage`: 查询本地 JSONL 历史用量日志。
 - `/admin/usage/recent`: 查询最近历史用量日志。
 - `/admin/usage/summary`: 查询历史用量聚合，返回 summary、时间序列和 client/model/endpoint 排行。

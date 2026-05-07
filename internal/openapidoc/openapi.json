@@ -1430,6 +1430,39 @@
         }
       }
     },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get Prometheus metrics",
+        "description": "Requires metrics:read or admin:read. Returns Prometheus text format metrics.",
+        "operationId": "getPrometheusMetrics",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text format metrics.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
