@@ -40,7 +40,8 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 ```json
 {
   "http": {
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "max_response_body_bytes": 67108864
   },
   "admin": {
     "token": "mr-replace-with-admin-token",
@@ -133,6 +134,8 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 
 配置说明：
 
+- `http.timeout_seconds`: 单次上游请求超时时间。小于等于 `0` 时默认 `120` 秒。
+- `http.max_response_body_bytes`: 非流式上游响应体最大缓冲大小。小于等于 `0` 时默认 `67108864` 字节，即 `64MB`。
 - `models`: 对外暴露的模型名。客户端请求使用这里的 key。
 - `admin.token`: Admin API 的全权限 Bearer token。为空且未配置 `admin.keys` 时不校验 Admin API，生产环境不建议留空。
 - `admin.keys[].name`: Admin key 名称，用于区分 WebUI、脚本或运维用户。

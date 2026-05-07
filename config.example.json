@@ -1,6 +1,7 @@
 {
   "http": {
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "max_response_body_bytes": 67108864
   },
   "admin": {
     "token": "mr-replace-with-admin-token",

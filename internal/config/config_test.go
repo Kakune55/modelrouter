@@ -73,6 +73,35 @@ func TestValidateAcceptsWeightedStrategies(t *testing.T) {
 	}
 }
 
+func TestMaxResponseBodyBytesDefault(t *testing.T) {
+	cfg := &Config{}
+
+	if got := cfg.MaxResponseBodyBytes(); got != 64<<20 {
+		t.Fatalf("MaxResponseBodyBytes() = %d", got)
+	}
+}
+
+func TestValidateRejectsNegativeMaxResponseBodyBytes(t *testing.T) {
+	cfg := &Config{
+		HTTP: HTTPConfig{MaxResponseBodyBytes: -1},
+		Models: map[string]ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]RouteGroupConfig{
+			"group": {
+				Strategy: StrategyRoundRobin,
+				Endpoints: []EndpointConfig{
+					{Name: "ep", BaseURL: "http://localhost:8081"},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
 func TestSaveFileWritesLoadableConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := &Config{

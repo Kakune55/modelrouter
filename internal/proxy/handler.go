@@ -17,6 +17,7 @@ import (
 )
 
 var errEndpointConcurrencyLimited = errors.New("all candidate endpoints are at max concurrency")
+var errUpstreamResponseBodyTooLarge = errors.New("upstream response body exceeds configured limit")
 
 type Handler struct {
 	store         *router.Store
@@ -107,7 +108,7 @@ func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPa
 	if useFeatures {
 		features = snap.Config.Features
 	}
-	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.Timeout(), features, route, upstreamPath)
+	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.Timeout(), snap.Config.MaxResponseBodyBytes(), features, route, upstreamPath)
 	duration := time.Since(start)
 	if endpoint.Name == "" {
 		endpoint = route.Endpoint
@@ -159,7 +160,7 @@ type upstreamResponse struct {
 	Stats      responseStats
 }
 
-func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, features config.FeaturesConfig, route *router.Route, upstreamPath string) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
+func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, maxResponseBodyBytes int64, features config.FeaturesConfig, route *router.Route, upstreamPath string) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
 	endpoints := route.Candidates()
 	var lastErr error
 	var lastResponse *upstreamResponse
@@ -175,7 +176,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			route.Release(endpoint.Name)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
 		}
-		resp, err := h.forward(w, r, upstreamBody, timeout, endpoint, upstreamPath)
+		resp, err := h.forward(w, r, upstreamBody, timeout, maxResponseBodyBytes, endpoint, upstreamPath)
 		route.Release(endpoint.Name)
 		if err != nil {
 			route.MarkFailure(endpoint.Name)
@@ -242,7 +243,7 @@ func applyEndpointHeaders(header http.Header, values map[string]string) {
 	}
 }
 
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, endpoint config.EndpointConfig, upstreamPath string) (*upstreamResponse, error) {
+func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, maxResponseBodyBytes int64, endpoint config.EndpointConfig, upstreamPath string) (*upstreamResponse, error) {
 	started := time.Now()
 	ctx := r.Context()
 	if timeout > 0 {
@@ -286,7 +287,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 		}, err
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readLimitedResponseBody(resp.Body, maxResponseBodyBytes)
 	if err != nil {
 		return &upstreamResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, err
 	}
@@ -297,6 +298,18 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 		Usage:      parseUsage(respBody),
 		Stats:      responseStats{},
 	}, nil
+}
+
+func readLimitedResponseBody(body io.Reader, maxBytes int64) ([]byte, error) {
+	limited := io.LimitReader(body, maxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, errUpstreamResponseBodyTooLarge
+	}
+	return data, nil
 }
 
 func writeBufferedResponse(w http.ResponseWriter, resp *upstreamResponse) (int64, error) {

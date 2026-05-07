@@ -1858,7 +1858,14 @@
         "properties": {
           "timeout_seconds": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Upstream request timeout in seconds. Values <= 0 use the default 120 seconds."
+          },
+          "max_response_body_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Maximum buffered upstream response body size for non-streaming responses. Values <= 0 use the default 67108864 bytes."
           }
         }
       },

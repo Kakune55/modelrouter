@@ -422,6 +422,56 @@ func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsFallsBackWhenUpstreamResponseBodyTooLarge(t *testing.T) {
+	firstCalled := false
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[],"padding":"too-large"}`))
+	}))
+	defer first.Close()
+
+	secondCalled := false
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer second.Close()
+
+	store := router.NewStore(&config.Config{
+		HTTP: config.HTTPConfig{MaxResponseBodyBytes: 20},
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "first", BaseURL: first.URL},
+					{Name: "second", BaseURL: second.URL},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	if !firstCalled || !secondCalled {
+		t.Fatalf("firstCalled=%v secondCalled=%v", firstCalled, secondCalled)
+	}
+	if strings.Contains(rr.Body.String(), "too-large") {
+		t.Fatalf("response should come from fallback endpoint: %s", rr.Body.String())
+	}
+}
+
 func TestChatCompletionsWritesUsageLogWhenEnabled(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

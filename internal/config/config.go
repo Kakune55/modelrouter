@@ -40,7 +40,8 @@ type Config struct {
 }
 
 type HTTPConfig struct {
-	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	TimeoutSeconds       int   `json:"timeout_seconds,omitempty"`
+	MaxResponseBodyBytes int64 `json:"max_response_body_bytes,omitempty"`
 }
 
 type AdminConfig struct {
@@ -196,6 +197,9 @@ func (c *Config) Validate() error {
 	}
 	if c.HTTP.TimeoutSeconds < 0 {
 		return errors.New("http.timeout_seconds must not be negative")
+	}
+	if c.HTTP.MaxResponseBodyBytes < 0 {
+		return errors.New("http.max_response_body_bytes must not be negative")
 	}
 	if c.UsageLog.RetentionHours < 0 {
 		return errors.New("usage_log.retention_hours must not be negative")
@@ -375,6 +379,13 @@ func (c *Config) Timeout() time.Duration {
 		return 120 * time.Second
 	}
 	return time.Duration(c.HTTP.TimeoutSeconds) * time.Second
+}
+
+func (c *Config) MaxResponseBodyBytes() int64 {
+	if c.HTTP.MaxResponseBodyBytes <= 0 {
+		return 64 << 20
+	}
+	return c.HTTP.MaxResponseBodyBytes
 }
 
 func validStrategy(strategy string) bool {
