@@ -171,7 +171,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			limited = true
 			continue
 		}
-		upstreamBody, err := prepareUpstreamBody(body, upstreamModel(route, endpoint), features)
+		upstreamBody, err := prepareUpstreamBody(body, upstreamModel(route, endpoint), endpoint.RequestOverrides, features)
 		if err != nil {
 			route.Release(endpoint.Name)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
@@ -336,10 +336,16 @@ func readModel(body []byte) (string, error) {
 	return req.Model, nil
 }
 
-func prepareUpstreamBody(body []byte, upstreamModel string, features config.FeaturesConfig) ([]byte, error) {
+func prepareUpstreamBody(body []byte, upstreamModel string, requestOverrides map[string]any, features config.FeaturesConfig) ([]byte, error) {
 	var req map[string]any
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, errors.New("request body must be valid JSON")
+	}
+	for key, value := range requestOverrides {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		req[key] = value
 	}
 	if strings.TrimSpace(upstreamModel) != "" {
 		req["model"] = upstreamModel

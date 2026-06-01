@@ -51,6 +51,32 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsEmptyRequestOverrideField(t *testing.T) {
+	cfg := &Config{
+		Models: map[string]ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]RouteGroupConfig{
+			"group": {
+				Strategy: StrategyRoundRobin,
+				Endpoints: []EndpointConfig{
+					{
+						Name:    "ep",
+						BaseURL: "http://localhost:8081",
+						RequestOverrides: map[string]any{
+							" ": 0.7,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
 func TestValidateAcceptsWeightedStrategies(t *testing.T) {
 	for _, strategy := range []string{StrategyWeightedRoundRobin, StrategyWeightedRandom} {
 		cfg := &Config{

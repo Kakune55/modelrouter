@@ -2128,6 +2128,11 @@
             },
             "description": "Fixed request headers sent to this upstream endpoint. If both headers.Authorization and api_key are set, api_key controls Authorization."
           },
+          "request_overrides": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Top-level JSON request body fields forced before forwarding to this upstream endpoint. Model selection is still controlled by model/upstream_model mapping."
+          },
           "weight": {
             "type": "integer",
             "minimum": 0,

@@ -271,6 +271,78 @@ func TestChatCompletionsRewritesUpstreamModel(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsAppliesEndpointRequestOverrides(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req map[string]any
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal body: %v", err)
+		}
+		if req["model"] != "Provider/RealModel" {
+			t.Fatalf("request_overrides should not override mapped model: %+v", req)
+		}
+		if req["temperature"] != 0.7 {
+			t.Fatalf("temperature was not overridden: %+v", req)
+		}
+		if req["top_p"] != 0.8 {
+			t.Fatalf("top_p was not overridden: %+v", req)
+		}
+		if req["top_k"] != float64(20) {
+			t.Fatalf("top_k was not added: %+v", req)
+		}
+		kwargs, ok := req["chat_template_kwargs"].(map[string]any)
+		if !ok || kwargs["enable_thinking"] != false {
+			t.Fatalf("chat_template_kwargs was not overridden: %+v", req)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	store := router.NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"public-model": {
+				RouteGroup: "group",
+			},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{
+					{
+						Name:    "upstream",
+						Model:   "Provider/RealModel",
+						BaseURL: upstream.URL,
+						RequestOverrides: map[string]any{
+							"model":       "Ignored/OverrideModel",
+							"temperature": 0.7,
+							"top_p":       0.8,
+							"top_k":       20,
+							"chat_template_kwargs": map[string]any{
+								"enable_thinking": false,
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"public-model","messages":[],"temperature":1.2,"top_p":1}`))
+	rr := httptest.NewRecorder()
+
+	handler.ChatCompletions(rr, req)
+	handler.Close()
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestEndpointModelOverridesModelUpstreamModel(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
