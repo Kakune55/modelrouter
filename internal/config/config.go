@@ -110,6 +110,7 @@ type EndpointConfig struct {
 	BaseURL          string            `json:"base_url"`
 	APIKey           string            `json:"api_key,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
+	RequestDefaults  map[string]any    `json:"request_defaults,omitempty"`
 	RequestOverrides map[string]any    `json:"request_overrides,omitempty"`
 	Weight           int               `json:"weight,omitempty"`
 	MaxConcurrency   int               `json:"max_concurrency,omitempty"`
@@ -255,6 +256,11 @@ func (c *Config) Validate() error {
 			for headerName := range ep.Headers {
 				if strings.TrimSpace(headerName) == "" {
 					return fmt.Errorf("route_group %q endpoint %q has empty header name", name, ep.Name)
+				}
+			}
+			for fieldName := range ep.RequestDefaults {
+				if strings.TrimSpace(fieldName) == "" {
+					return fmt.Errorf("route_group %q endpoint %q has empty request_defaults field name", name, ep.Name)
 				}
 			}
 			for fieldName := range ep.RequestOverrides {

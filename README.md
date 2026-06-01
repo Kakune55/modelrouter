@@ -117,9 +117,11 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
           "headers": {
             "X-Provider-Project": "replace-with-project-id"
           },
-          "request_overrides": {
+          "request_defaults": {
             "temperature": 0.7,
-            "top_p": 0.8,
+            "top_p": 0.8
+          },
+          "request_overrides": {
             "top_k": 20,
             "chat_template_kwargs": {
               "enable_thinking": false
@@ -168,6 +170,7 @@ go run ./cmd/modelrouter -addr :8080 -config config.json
 - `endpoints[].base_url`: OpenAI 兼容上游地址，例如 `http://host:port/v1`。
 - `endpoints[].api_key`: 当前 endpoint 使用的上游 API key。
 - `endpoints[].headers`: 发往当前 endpoint 的固定请求头，适合供应商项目 ID、组织 ID 等额外鉴权或路由参数。
+- `endpoints[].request_defaults`: 发往当前 endpoint 前补充请求 JSON body 里的顶层默认字段；仅当客户端未传该字段时生效，适合设置默认 `temperature`、`top_p` 等参数。
 - `endpoints[].request_overrides`: 发往当前 endpoint 前强制覆盖请求 JSON body 里的顶层字段，适合固定 `temperature`、`top_p`、`top_k`、`chat_template_kwargs` 等供应商参数。模型名仍由 `endpoints[].model` / `models[].upstream_model` 映射规则决定。
 - `endpoints[].max_concurrency`: 当前 endpoint 最大并发数。小于等于 `0` 表示不限制。
 - `endpoints[].weight`: 当前 endpoint 在 `weighted_round_robin` 或 `weighted_random` 策略下的流量权重。小于等于 `0` 时按 `1` 处理。

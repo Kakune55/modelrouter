@@ -77,9 +77,11 @@
           "headers": {
             "X-Provider-Project": "replace-with-project-id"
           },
-          "request_overrides": {
+          "request_defaults": {
             "temperature": 0.7,
-            "top_p": 0.8,
+            "top_p": 0.8
+          },
+          "request_overrides": {
             "top_k": 20,
             "chat_template_kwargs": {
               "enable_thinking": false
