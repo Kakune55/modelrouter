@@ -5,14 +5,69 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 )
 
-func contextWithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, timeout)
+type idleTimeoutContext struct {
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	timer   *time.Timer
+	timeout time.Duration
+}
+
+func contextWithIdleTimeout(parent context.Context, timeout time.Duration) (context.Context, *idleTimeoutContext) {
+	ctx, cancel := context.WithCancelCause(parent)
+	idle := &idleTimeoutContext{ctx: ctx, cancel: cancel, timeout: timeout}
+	if timeout > 0 {
+		idle.timer = time.AfterFunc(timeout, func() {
+			cancel(errUpstreamIdleTimeout)
+		})
+	}
+	return ctx, idle
+}
+
+func (c *idleTimeoutContext) Activity() {
+	if c.timer != nil {
+		c.timer.Reset(c.timeout)
+	}
+}
+
+func (c *idleTimeoutContext) Wrap(reader io.ReadCloser) io.ReadCloser {
+	if c.timer == nil {
+		return reader
+	}
+	return &activityReadCloser{ReadCloser: reader, activity: c.Activity}
+}
+
+func (c *idleTimeoutContext) NormalizeError(err error) error {
+	if err != nil && errors.Is(context.Cause(c.ctx), errUpstreamIdleTimeout) {
+		return errUpstreamIdleTimeout
+	}
+	return err
+}
+
+func (c *idleTimeoutContext) Close() {
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.cancel(nil)
+}
+
+type activityReadCloser struct {
+	io.ReadCloser
+	activity func()
+}
+
+func (r *activityReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 {
+		r.activity()
+	}
+	return n, err
 }
 
 func copyRequestHeaders(dst, src http.Header) {

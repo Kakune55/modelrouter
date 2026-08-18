@@ -1892,7 +1892,18 @@
           "timeout_seconds": {
             "type": "integer",
             "minimum": 0,
-            "description": "Upstream request timeout in seconds. Values <= 0 use the default 120 seconds."
+            "deprecated": true,
+            "description": "Deprecated alias for the total upstream request timeout. Used only when total_timeout_seconds is not positive."
+          },
+          "idle_timeout_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Upstream idle timeout in seconds. The timer resets whenever response data arrives. Values <= 0 use the default 120 seconds."
+          },
+          "total_timeout_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional total upstream request timeout in seconds. A value of 0 disables the total timeout."
           },
           "max_response_body_bytes": {
             "type": "integer",

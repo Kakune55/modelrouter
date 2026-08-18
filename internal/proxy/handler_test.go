@@ -2,12 +2,14 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"modelrouter/internal/config"
 	"modelrouter/internal/metrics"
@@ -713,6 +715,64 @@ func TestChatCompletionsCapturesStreamingUsage(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "data: [DONE]") {
 		t.Fatalf("stream body missing DONE: %s", rr.Body.String())
+	}
+}
+
+func TestForwardIdleTimeoutResetsWhenStreamingDataArrives(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, data := range []string{
+			"data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
+			"data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n",
+			"data: [DONE]\n\n",
+		} {
+			_, _ = io.WriteString(w, data)
+			flusher.Flush()
+			time.Sleep(60 * time.Millisecond)
+		}
+	}))
+	defer upstream.Close()
+
+	handler := NewHandler(router.NewStore(&config.Config{}), metrics.NewRecorder())
+	defer handler.Close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo"}`))
+	rr := httptest.NewRecorder()
+
+	resp, err := handler.forward(rr, req, []byte(`{"model":"demo"}`), 100*time.Millisecond, 0, 64<<20, config.EndpointConfig{BaseURL: upstream.URL}, "/chat/completions")
+	if err != nil {
+		t.Fatalf("forward() error = %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if !strings.Contains(rr.Body.String(), "data: [DONE]") {
+		t.Fatalf("stream body missing DONE: %s", rr.Body.String())
+	}
+}
+
+func TestForwardIdleTimeoutWhileWaitingForUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(500 * time.Millisecond):
+			w.WriteHeader(http.StatusOK)
+		case <-r.Context().Done():
+		}
+	}))
+	defer upstream.Close()
+
+	handler := NewHandler(router.NewStore(&config.Config{}), metrics.NewRecorder())
+	defer handler.Close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo"}`))
+	rr := httptest.NewRecorder()
+	started := time.Now()
+
+	_, err := handler.forward(rr, req, []byte(`{"model":"demo"}`), 50*time.Millisecond, 0, 64<<20, config.EndpointConfig{BaseURL: upstream.URL}, "/chat/completions")
+	if !errors.Is(err, errUpstreamIdleTimeout) {
+		t.Fatalf("forward() error = %v, want %v", err, errUpstreamIdleTimeout)
+	}
+	if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+		t.Fatalf("idle timeout took too long: %s", elapsed)
 	}
 }
 

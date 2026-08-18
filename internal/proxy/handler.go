@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +19,7 @@ import (
 
 var errEndpointConcurrencyLimited = errors.New("all candidate endpoints are at max concurrency")
 var errUpstreamResponseBodyTooLarge = errors.New("upstream response body exceeds configured limit")
+var errUpstreamIdleTimeout = errors.New("upstream idle timeout")
 
 type Handler struct {
 	store         *router.Store
@@ -108,7 +110,7 @@ func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPa
 	if useFeatures {
 		features = snap.Config.Features
 	}
-	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.Timeout(), snap.Config.MaxResponseBodyBytes(), features, route, upstreamPath)
+	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.IdleTimeout(), snap.Config.TotalTimeout(), snap.Config.MaxResponseBodyBytes(), features, route, upstreamPath)
 	duration := time.Since(start)
 	if endpoint.Name == "" {
 		endpoint = route.Endpoint
@@ -160,7 +162,7 @@ type upstreamResponse struct {
 	Stats      responseStats
 }
 
-func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, maxResponseBodyBytes int64, features config.FeaturesConfig, route *router.Route, upstreamPath string) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
+func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, features config.FeaturesConfig, route *router.Route, upstreamPath string) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
 	endpoints := route.Candidates()
 	var lastErr error
 	var lastResponse *upstreamResponse
@@ -176,7 +178,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			route.Release(endpoint.Name)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
 		}
-		resp, err := h.forward(w, r, upstreamBody, timeout, maxResponseBodyBytes, endpoint, upstreamPath)
+		resp, err := h.forward(w, r, upstreamBody, idleTimeout, totalTimeout, maxResponseBodyBytes, endpoint, upstreamPath)
 		route.Release(endpoint.Name)
 		if err != nil {
 			statusCode := 0
@@ -247,14 +249,16 @@ func applyEndpointHeaders(header http.Header, values map[string]string) {
 	}
 }
 
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, timeout time.Duration, maxResponseBodyBytes int64, endpoint config.EndpointConfig, upstreamPath string) (*upstreamResponse, error) {
+func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, endpoint config.EndpointConfig, upstreamPath string) (*upstreamResponse, error) {
 	started := time.Now()
 	ctx := r.Context()
-	if timeout > 0 {
-		var cancel func()
-		ctx, cancel = contextWithTimeout(ctx, timeout)
+	if totalTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, totalTimeout)
 		defer cancel()
 	}
+	ctx, idle := contextWithIdleTimeout(ctx, idleTimeout)
+	defer idle.Close()
 
 	upstreamURL := strings.TrimRight(endpoint.BaseURL, "/") + upstreamPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
@@ -270,14 +274,17 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, idle.NormalizeError(err)
 	}
 	defer resp.Body.Close()
+	idle.Activity()
+	resp.Body = idle.Wrap(resp.Body)
 
 	if isStreamResponse(resp.Header) {
 		copyResponseHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		n, stats, err := copyStreaming(w, resp.Body, started)
+		err = idle.NormalizeError(err)
 		return &upstreamResponse{
 			StatusCode: resp.StatusCode,
 			Usage:      stats.Usage,
@@ -293,7 +300,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, t
 
 	respBody, err := readLimitedResponseBody(resp.Body, maxResponseBodyBytes)
 	if err != nil {
-		return &upstreamResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, err
+		return &upstreamResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, idle.NormalizeError(err)
 	}
 	return &upstreamResponse{
 		StatusCode: resp.StatusCode,

@@ -1,6 +1,7 @@
 {
   "http": {
-    "timeout_seconds": 120,
+    "idle_timeout_seconds": 120,
+    "total_timeout_seconds": 0,
     "max_response_body_bytes": 67108864
   },
   "admin": {

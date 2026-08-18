@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestValidateRejectsMissingRouteGroup(t *testing.T) {
@@ -130,6 +131,75 @@ func TestMaxResponseBodyBytesDefault(t *testing.T) {
 
 	if got := cfg.MaxResponseBodyBytes(); got != 64<<20 {
 		t.Fatalf("MaxResponseBodyBytes() = %d", got)
+	}
+}
+
+func TestHTTPTimeouts(t *testing.T) {
+	tests := []struct {
+		name      string
+		http      HTTPConfig
+		wantIdle  time.Duration
+		wantTotal time.Duration
+	}{
+		{
+			name:      "defaults to idle timeout only",
+			wantIdle:  120 * time.Second,
+			wantTotal: 0,
+		},
+		{
+			name:      "explicit idle and total timeouts",
+			http:      HTTPConfig{IdleTimeoutSeconds: 30, TotalTimeoutSeconds: 600},
+			wantIdle:  30 * time.Second,
+			wantTotal: 600 * time.Second,
+		},
+		{
+			name:      "deprecated timeout remains a total timeout",
+			http:      HTTPConfig{TimeoutSeconds: 90},
+			wantIdle:  120 * time.Second,
+			wantTotal: 90 * time.Second,
+		},
+		{
+			name:      "new total timeout takes precedence over deprecated timeout",
+			http:      HTTPConfig{TimeoutSeconds: 90, TotalTimeoutSeconds: 300},
+			wantIdle:  120 * time.Second,
+			wantTotal: 300 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{HTTP: tt.http}
+			if got := cfg.IdleTimeout(); got != tt.wantIdle {
+				t.Fatalf("IdleTimeout() = %s, want %s", got, tt.wantIdle)
+			}
+			if got := cfg.TotalTimeout(); got != tt.wantTotal {
+				t.Fatalf("TotalTimeout() = %s, want %s", got, tt.wantTotal)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsNegativeHTTPTimeouts(t *testing.T) {
+	for _, httpConfig := range []HTTPConfig{
+		{TimeoutSeconds: -1},
+		{IdleTimeoutSeconds: -1},
+		{TotalTimeoutSeconds: -1},
+	} {
+		cfg := &Config{
+			HTTP: httpConfig,
+			Models: map[string]ModelConfig{
+				"demo": {RouteGroup: "group"},
+			},
+			RouteGroups: map[string]RouteGroupConfig{
+				"group": {
+					Strategy:  StrategyRoundRobin,
+					Endpoints: []EndpointConfig{{Name: "ep", BaseURL: "http://localhost:8081"}},
+				},
+			},
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected validation error for HTTP config %+v", httpConfig)
+		}
 	}
 }
 

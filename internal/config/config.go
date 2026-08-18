@@ -41,6 +41,8 @@ type Config struct {
 
 type HTTPConfig struct {
 	TimeoutSeconds       int   `json:"timeout_seconds,omitempty"`
+	IdleTimeoutSeconds   int   `json:"idle_timeout_seconds,omitempty"`
+	TotalTimeoutSeconds  int   `json:"total_timeout_seconds,omitempty"`
 	MaxResponseBodyBytes int64 `json:"max_response_body_bytes,omitempty"`
 }
 
@@ -199,6 +201,12 @@ func (c *Config) Validate() error {
 	}
 	if c.HTTP.TimeoutSeconds < 0 {
 		return errors.New("http.timeout_seconds must not be negative")
+	}
+	if c.HTTP.IdleTimeoutSeconds < 0 {
+		return errors.New("http.idle_timeout_seconds must not be negative")
+	}
+	if c.HTTP.TotalTimeoutSeconds < 0 {
+		return errors.New("http.total_timeout_seconds must not be negative")
 	}
 	if c.HTTP.MaxResponseBodyBytes < 0 {
 		return errors.New("http.max_response_body_bytes must not be negative")
@@ -386,11 +394,23 @@ func validAdminPermission(permission string) bool {
 	}
 }
 
-func (c *Config) Timeout() time.Duration {
-	if c.HTTP.TimeoutSeconds <= 0 {
+func (c *Config) IdleTimeout() time.Duration {
+	if c.HTTP.IdleTimeoutSeconds <= 0 {
 		return 120 * time.Second
 	}
-	return time.Duration(c.HTTP.TimeoutSeconds) * time.Second
+	return time.Duration(c.HTTP.IdleTimeoutSeconds) * time.Second
+}
+
+func (c *Config) TotalTimeout() time.Duration {
+	if c.HTTP.TotalTimeoutSeconds > 0 {
+		return time.Duration(c.HTTP.TotalTimeoutSeconds) * time.Second
+	}
+	// timeout_seconds is the deprecated name for the total request timeout.
+	// Keeping it as a fallback preserves the behavior of existing configs.
+	if c.HTTP.TimeoutSeconds > 0 {
+		return time.Duration(c.HTTP.TimeoutSeconds) * time.Second
+	}
+	return 0
 }
 
 func (c *Config) MaxResponseBodyBytes() int64 {
