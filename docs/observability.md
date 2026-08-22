@@ -112,7 +112,7 @@ curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public
 
 ## InfluxDB 指标推送
 
-启用方式和完整配置见[配置说明](configuration.md#influxdb-指标推送)。modelrouter 会为每个完成的代理请求写入一个 `modelrouter_request` 数据点，不会周期性重复推送内存累计值。
+启用方式和完整配置见[配置说明](configuration.md#influxdb-指标推送)。modelrouter 会为每个到达 Chat Completions 或 Embeddings 代理端点的请求写入一个 `modelrouter_request` 数据点，包括认证、限流、模型解析、选路或上游调用失败的请求，不会周期性重复推送内存累计值。
 
 内建 tags：
 
@@ -138,7 +138,7 @@ curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public
 - `ttft_ms`、`generation_ms`
 - `end_to_end_tokens_per_second`、`tokens_per_second`
 
-一次完成的代理请求只写入一个 point，上述数值作为同一个 point 的 fields。`ttft_ms`、`generation_ms` 和 token 速率仅在流式响应能够识别首个内容事件时写入；`cache_read_tokens`、`reasoning_tokens` 在上游没有返回对应 usage details 时为 `0`。错误详情、prompt、messages、响应正文和任何 API token 都不会写入 InfluxDB。
+一次请求只写入一个 point，上述数值作为同一个 point 的 fields。请求未进入上游时 `backend` 和实际 `model` tag 省略。`ttft_ms`、`generation_ms` 和 token 速率仅在流式响应能够识别首个内容事件时写入；`cache_read_tokens`、`reasoning_tokens` 在上游没有返回对应 usage details 时为 `0`。错误详情、prompt、messages、响应正文和任何 API token 都不会写入 InfluxDB。
 
 point timestamp 使用请求完成时间的 Unix 纳秒值。v2 写入使用 `precision=ns`，v3 使用 `precision=nanosecond`，不会截断到秒；同一进程遇到相同或回拨的时钟值时会递增 `1ns`，避免相同 tag set 的并发请求合并。多实例共同写入时建议通过静态 tag 配置不同的 `instance` 值。
 

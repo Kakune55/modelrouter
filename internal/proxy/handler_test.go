@@ -193,7 +193,8 @@ func TestChatCompletionsRejectsMissingAPIKey(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(store, metrics.NewRecorder())
+	exporter := &recordingEventExporter{}
+	handler := NewHandler(store, metrics.NewRecorder()).WithMetricsExporter(exporter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
 	rr := httptest.NewRecorder()
@@ -202,6 +203,10 @@ func TestChatCompletionsRejectsMissingAPIKey(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	if len(exporter.events) != 1 || exporter.events[0].StatusCode != http.StatusUnauthorized ||
+		exporter.events[0].Endpoint != "" || exporter.events[0].CompletedAt.IsZero() {
+		t.Fatalf("unauthorized events = %+v", exporter.events)
 	}
 }
 
@@ -228,7 +233,8 @@ func TestChatCompletionsRejectsDisallowedModel(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(store, metrics.NewRecorder())
+	exporter := &recordingEventExporter{}
+	handler := NewHandler(store, metrics.NewRecorder()).WithMetricsExporter(exporter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"blocked","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer secret")
@@ -238,6 +244,10 @@ func TestChatCompletionsRejectsDisallowedModel(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	if len(exporter.events) != 1 || exporter.events[0].StatusCode != http.StatusForbidden ||
+		exporter.events[0].Model != "blocked" || exporter.events[0].RouteGroup != "group" || exporter.events[0].Endpoint != "" {
+		t.Fatalf("forbidden events = %+v", exporter.events)
 	}
 }
 

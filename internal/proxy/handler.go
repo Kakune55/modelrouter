@@ -73,88 +73,99 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPath string, useFeatures bool) {
 	requestStarted := time.Now()
+	snap := h.store.Get()
+	event := metrics.Event{APIEndpoint: r.URL.Path}
+	defer func() {
+		event.CompletedAt = time.Now()
+		event.Duration = event.CompletedAt.Sub(requestStarted)
+		h.recorder.Record(event)
+		_ = h.usageLogger.Record(snap.Config.UsageLog, event)
+		if h.metricsExport != nil {
+			h.metricsExport.Record(event)
+		}
+	}()
+
 	if r.Method != http.MethodPost {
+		event.StatusCode = http.StatusMethodNotAllowed
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
 		return
 	}
 	client, ok := h.authenticate(r)
 	if !ok {
+		event.StatusCode = http.StatusUnauthorized
 		writeUnauthorized(w, "invalid or missing API key")
 		return
 	}
+	event.Client = client.Name
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {
+		event.StatusCode = http.StatusBadRequest
 		writeOpenAIError(w, http.StatusBadRequest, "failed to read request body", "bad_request")
 		return
 	}
 
 	modelName, err := readModel(body)
 	if err != nil {
+		event.StatusCode = http.StatusBadRequest
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "bad_request")
 		return
 	}
+	event.Model = modelName
+	if model, exists := snap.Config.Models[modelName]; exists {
+		event.RouteGroup = model.RouteGroup
+	}
 	if !client.CanAccessModel(modelName) {
+		event.StatusCode = http.StatusForbidden
 		writeOpenAIError(w, http.StatusForbidden, "model is not allowed for this API key", "model_not_allowed")
 		return
 	}
-	limit := h.store.Get().Config.AccessGroups[client.AccessGroup].RateLimit
+	limit := snap.Config.AccessGroups[client.AccessGroup].RateLimit
 	decision := h.clientLimiter.acquire(client.Name, limit, time.Now())
 	if !decision.Allowed {
+		event.StatusCode = http.StatusTooManyRequests
 		writeOpenAIError(w, http.StatusTooManyRequests, decision.Reason, "rate_limit_exceeded")
 		return
 	}
 	defer h.clientLimiter.release(client.Name)
 
-	snap := h.store.Get()
 	route, err := snap.Pick(modelName, clientIP(r))
 	if err != nil {
 		if errors.Is(err, router.ErrNoAvailableEndpoint) {
+			event.StatusCode = http.StatusServiceUnavailable
 			writeOpenAIError(w, http.StatusServiceUnavailable, err.Error(), "upstream_unavailable")
 			return
 		}
+		event.StatusCode = http.StatusBadRequest
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "model_not_found")
 		return
 	}
+	event.RouteGroup = route.Group
 
 	features := config.FeaturesConfig{}
 	if useFeatures {
 		features = snap.Config.Features
 	}
 	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.IdleTimeout(), snap.Config.TotalTimeout(), snap.Config.MaxResponseBodyBytes(), features, route, upstreamPath, requestStarted)
-	completedAt := time.Now()
 	upstreamModelName := ""
 	if endpoint.Name != "" {
 		upstreamModelName = upstreamModel(route, endpoint)
 	}
-	event := metrics.Event{
-		Client:             client.Name,
-		Model:              modelName,
-		UpstreamModel:      upstreamModelName,
-		RouteGroup:         route.Group,
-		Endpoint:           endpoint.Name,
-		APIEndpoint:        r.URL.Path,
-		StatusCode:         status,
-		Duration:           completedAt.Sub(requestStarted),
-		UpstreamDuration:   responseStats.UpstreamDuration,
-		BytesOut:           bytesOut,
-		PromptTokens:       usage.PromptTokens,
-		OutputTokens:       usage.CompletionTokens,
-		TotalTokens:        usage.TotalTokens,
-		CacheReadTokens:    usage.PromptTokensDetails.CachedTokens,
-		ReasoningTokens:    usage.CompletionTokensDetails.ReasoningTokens,
-		RetryCount:         max(responseStats.Attempts-1, 0),
-		Streaming:          responseStats.Streaming,
-		TTFT:               responseStats.TTFT,
-		GenerationDuration: responseStats.GenerationDuration,
-		CompletedAt:        completedAt,
-		Err:                err,
-	}
-	h.recorder.Record(event)
-	_ = h.usageLogger.Record(snap.Config.UsageLog, event)
-	if h.metricsExport != nil {
-		h.metricsExport.Record(event)
-	}
+	event.UpstreamModel = upstreamModelName
+	event.Endpoint = endpoint.Name
+	event.StatusCode = status
+	event.UpstreamDuration = responseStats.UpstreamDuration
+	event.BytesOut = bytesOut
+	event.PromptTokens = usage.PromptTokens
+	event.OutputTokens = usage.CompletionTokens
+	event.TotalTokens = usage.TotalTokens
+	event.CacheReadTokens = usage.PromptTokensDetails.CachedTokens
+	event.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
+	event.RetryCount = max(responseStats.Attempts-1, 0)
+	event.Streaming = responseStats.Streaming
+	event.TTFT = responseStats.TTFT
+	event.GenerationDuration = responseStats.GenerationDuration
+	event.Err = err
 
 	if err != nil {
 		if responseStats.ResponseStarted {
