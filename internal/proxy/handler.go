@@ -276,7 +276,9 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, i
 	if err != nil {
 		return nil, idle.NormalizeError(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	idle.Activity()
 	resp.Body = idle.Wrap(resp.Body)
 

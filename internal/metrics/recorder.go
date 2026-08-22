@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"hash/fnv"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -309,20 +310,14 @@ func (r *Recorder) shardFor(key string) *recorderShard {
 
 func cloneCounter(counter *Counter) Counter {
 	copy := *counter
-	copy.StatusCodes = make(map[int]int64, len(counter.StatusCodes))
-	for code, count := range counter.StatusCodes {
-		copy.StatusCodes[code] = count
-	}
+	copy.StatusCodes = maps.Clone(counter.StatusCodes)
 	updateDerived(&copy)
 	return copy
 }
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
 	clone := snapshot
-	clone.Windows = make(map[string]WindowSummary, len(snapshot.Windows))
-	for key, value := range snapshot.Windows {
-		clone.Windows[key] = value
-	}
+	clone.Windows = maps.Clone(snapshot.Windows)
 	clone.Items = cloneCounters(snapshot.Items)
 	clone.ByClient = cloneCounters(snapshot.ByClient)
 	clone.ByModel = cloneCounters(snapshot.ByModel)

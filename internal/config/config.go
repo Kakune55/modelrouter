@@ -32,13 +32,13 @@ const (
 type Config struct {
 	Models       map[string]ModelConfig       `json:"models"`
 	RouteGroups  map[string]RouteGroupConfig  `json:"route_groups"`
-	HTTP         HTTPConfig                   `json:"http,omitempty"`
-	Admin        AdminConfig                  `json:"admin,omitempty"`
-	Auth         AuthConfig                   `json:"auth,omitempty"`
+	HTTP         HTTPConfig                   `json:"http"`
+	Admin        AdminConfig                  `json:"admin"`
+	Auth         AuthConfig                   `json:"auth"`
 	AccessGroups map[string]AccessGroupConfig `json:"access_groups,omitempty"`
-	Features     FeaturesConfig               `json:"features,omitempty"`
-	UsageLog     UsageLogConfig               `json:"usage_log,omitempty"`
-	Metrics      MetricsConfig                `json:"metrics,omitempty"`
+	Features     FeaturesConfig               `json:"features"`
+	UsageLog     UsageLogConfig               `json:"usage_log"`
+	Metrics      MetricsConfig                `json:"metrics"`
 }
 
 type HTTPConfig struct {
@@ -70,7 +70,7 @@ type UsageLogConfig struct {
 }
 
 type MetricsConfig struct {
-	InfluxDB InfluxDBConfig `json:"influxdb,omitempty"`
+	InfluxDB InfluxDBConfig `json:"influxdb"`
 }
 
 type InfluxDBConfig struct {
@@ -102,7 +102,7 @@ type ClientKeyConfig struct {
 type AccessGroupConfig struct {
 	AllowedModels []string        `json:"allowed_models,omitempty"`
 	BlockedModels []string        `json:"blocked_models,omitempty"`
-	RateLimit     RateLimitConfig `json:"rate_limit,omitempty"`
+	RateLimit     RateLimitConfig `json:"rate_limit"`
 }
 
 type RateLimitConfig struct {
@@ -117,7 +117,7 @@ type ModelConfig struct {
 
 type RouteGroupConfig struct {
 	Strategy      string              `json:"strategy"`
-	PassiveHealth PassiveHealthConfig `json:"passive_health,omitempty"`
+	PassiveHealth PassiveHealthConfig `json:"passive_health"`
 	Endpoints     []EndpointConfig    `json:"endpoints"`
 }
 

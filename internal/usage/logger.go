@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,7 +152,7 @@ func (l *Logger) flush(batch []queuedRecord) {
 		groups[path] = append(groups[path], item)
 	}
 	for path, items := range groups {
-		writeRecords(path, items)
+		_ = writeRecords(path, items)
 	}
 }
 
@@ -169,16 +170,21 @@ func (l *Logger) prepareDir(item queuedRecord) error {
 	return nil
 }
 
-func writeRecords(path string, items []queuedRecord) {
+func writeRecords(path string, items []queuedRecord) (err error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return
+		return err
 	}
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
 	encoder := json.NewEncoder(file)
 	for _, item := range items {
-		_ = encoder.Encode(item.record)
+		if err := encoder.Encode(item.record); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func usageDir(cfg config.UsageLogConfig) string {

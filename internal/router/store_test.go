@@ -81,7 +81,7 @@ func TestWeightedRoundRobinUsesEndpointWeights(t *testing.T) {
 	})
 
 	counts := map[string]int{}
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		route, err := store.Get().Pick("demo", "127.0.0.1")
 		if err != nil {
 			t.Fatalf("Pick() error = %v", err)

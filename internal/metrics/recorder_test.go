@@ -80,7 +80,7 @@ func TestRecorderSnapshotAggregatesMetrics(t *testing.T) {
 
 func TestRecorderAggregatesAcrossShards(t *testing.T) {
 	recorder := NewRecorder()
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		recorder.Record(Event{
 			Client:     "client",
 			Model:      "model",

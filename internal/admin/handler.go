@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -608,9 +609,7 @@ func redactedConfig(cfg *config.Config) *config.Config {
 		}
 	}
 	clone.Models = make(map[string]config.ModelConfig, len(cfg.Models))
-	for key, value := range cfg.Models {
-		clone.Models[key] = value
-	}
+	maps.Copy(clone.Models, cfg.Models)
 	clone.AccessGroups = make(map[string]config.AccessGroupConfig, len(cfg.AccessGroups))
 	for key, value := range cfg.AccessGroups {
 		value.AllowedModels = append([]string(nil), value.AllowedModels...)
@@ -717,10 +716,7 @@ func paginateCounters(items []metrics.Counter, query metricsQuery) []metrics.Cou
 	if query.Offset >= len(items) || query.Limit == 0 {
 		return nil
 	}
-	end := query.Offset + query.Limit
-	if end > len(items) {
-		end = len(items)
-	}
+	end := min(query.Offset+query.Limit, len(items))
 	return items[query.Offset:end]
 }
 
@@ -907,9 +903,7 @@ func cloneConfig(cfg *config.Config) *config.Config {
 	}
 	clone.Auth.Keys = append([]config.ClientKeyConfig(nil), cfg.Auth.Keys...)
 	clone.Models = make(map[string]config.ModelConfig, len(cfg.Models))
-	for key, value := range cfg.Models {
-		clone.Models[key] = value
-	}
+	maps.Copy(clone.Models, cfg.Models)
 	clone.AccessGroups = make(map[string]config.AccessGroupConfig, len(cfg.AccessGroups))
 	for key, value := range cfg.AccessGroups {
 		value.AllowedModels = append([]string(nil), value.AllowedModels...)
@@ -922,9 +916,7 @@ func cloneConfig(cfg *config.Config) *config.Config {
 		for i := range value.Endpoints {
 			if value.Endpoints[i].Headers != nil {
 				headers := make(map[string]string, len(value.Endpoints[i].Headers))
-				for header, headerValue := range value.Endpoints[i].Headers {
-					headers[header] = headerValue
-				}
+				maps.Copy(headers, value.Endpoints[i].Headers)
 				value.Endpoints[i].Headers = headers
 			}
 		}
@@ -934,14 +926,7 @@ func cloneConfig(cfg *config.Config) *config.Config {
 }
 
 func cloneStringMap(source map[string]string) map[string]string {
-	if source == nil {
-		return nil
-	}
-	clone := make(map[string]string, len(source))
-	for key, value := range source {
-		clone[key] = value
-	}
-	return clone
+	return maps.Clone(source)
 }
 
 func decodeAdminJSON(w http.ResponseWriter, r *http.Request, out any) bool {

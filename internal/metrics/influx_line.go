@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"errors"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,9 +23,7 @@ var influxTagEscaper = strings.NewReplacer(
 // 完成时间由调用方传入，确保重试时可以复用同一个数据点标识。
 func EncodeInfluxLine(ev Event, staticTags map[string]string, completedAt time.Time) (string, error) {
 	tags := make(map[string]string, len(staticTags)+5)
-	for key, value := range staticTags {
-		tags[key] = value
-	}
+	maps.Copy(tags, staticTags)
 	setInfluxTag(tags, "client", ev.Client)
 	setInfluxTag(tags, "model", ev.Model)
 	setInfluxTag(tags, "route_group", ev.RouteGroup)
