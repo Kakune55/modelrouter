@@ -32,6 +32,15 @@
     "dir": "usage_logs",
     "retention_hours": 720
   },
+  "metrics": {
+    "influxdb": {
+      "enabled": false,
+      "api_version": 3,
+      "url": "http://localhost:8181",
+      "database": "modelrouter",
+      "token": "replace-with-influxdb-token"
+    }
+  },
   "auth": {
     "enabled": true,
     "keys": [

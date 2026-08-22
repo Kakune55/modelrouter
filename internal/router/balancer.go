@@ -31,7 +31,7 @@ func NewBalancer(strategy string, endpoints []config.EndpointConfig) Balancer {
 }
 
 type roundRobinBalancer struct {
-	next      uint64
+	next      atomic.Uint64
 	endpoints []config.EndpointConfig
 }
 
@@ -40,7 +40,7 @@ func (b *roundRobinBalancer) Order(_ string) []int {
 	if len(b.endpoints) == 0 {
 		return order
 	}
-	idx := int(atomic.AddUint64(&b.next, 1)-1) % len(b.endpoints)
+	idx := int(b.next.Add(1)-1) % len(b.endpoints)
 	for i := range b.endpoints {
 		order = append(order, (idx+i)%len(b.endpoints))
 	}
@@ -172,7 +172,7 @@ func orderStartingAt(length int, start int) []int {
 	if length == 0 {
 		return order
 	}
-	for i := 0; i < length; i++ {
+	for i := range length {
 		order = append(order, (start+i)%length)
 	}
 	return order

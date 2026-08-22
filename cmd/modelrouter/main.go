@@ -30,8 +30,14 @@ func main() {
 
 	store := router.NewStore(cfg)
 	recorder := metrics.NewRecorder()
-	proxyHandler := proxy.NewHandler(store, recorder)
-	adminHandler := admin.NewHandler(store, recorder, *configPath).WithClientLimitProvider(proxyHandler)
+	influxExporter := metrics.NewInfluxDBExporter(cfg.Metrics.InfluxDB, nil)
+	proxyHandler := proxy.NewHandler(store, recorder).WithMetricsExporter(influxExporter)
+	adminHandler := admin.NewHandler(store, recorder, *configPath).
+		WithClientLimitProvider(proxyHandler).
+		WithMetricsExporterStatusProvider(influxExporter).
+		WithConfigUpdateHook(func(next *config.Config) {
+			influxExporter.Reconfigure(next.Metrics.InfluxDB)
+		})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", proxyHandler.Models)
@@ -84,4 +90,9 @@ func main() {
 		log.Printf("shutdown: %v", err)
 	}
 	proxyHandler.Close()
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer flushCancel()
+	if err := influxExporter.Close(flushCtx); err != nil {
+		log.Printf("flush InfluxDB metrics: %v", err)
+	}
 }

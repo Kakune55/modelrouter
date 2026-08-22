@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -237,11 +238,7 @@ func hasGeneratedText(value any) bool {
 	case string:
 		return v != "" && v != "assistant"
 	case []any:
-		for _, item := range v {
-			if hasGeneratedText(item) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(v, hasGeneratedText)
 	case map[string]any:
 		for key, item := range v {
 			if key == "role" {

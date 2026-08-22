@@ -224,6 +224,128 @@ func TestValidateRejectsNegativeMaxResponseBodyBytes(t *testing.T) {
 	}
 }
 
+func TestInfluxDBConfigDefaults(t *testing.T) {
+	influx := InfluxDBConfig{}
+
+	if got := influx.EffectiveBatchSize(); got != 100 {
+		t.Fatalf("EffectiveBatchSize() = %d", got)
+	}
+	if got := influx.FlushInterval(); got != time.Second {
+		t.Fatalf("FlushInterval() = %s", got)
+	}
+	if got := influx.EffectiveQueueSize(); got != 4096 {
+		t.Fatalf("EffectiveQueueSize() = %d", got)
+	}
+	if got := influx.RequestTimeout(); got != 5*time.Second {
+		t.Fatalf("RequestTimeout() = %s", got)
+	}
+}
+
+func TestValidateInfluxDBVersions(t *testing.T) {
+	tests := []struct {
+		name    string
+		influx  InfluxDBConfig
+		wantErr bool
+	}{
+		{name: "disabled without connection settings"},
+		{
+			name: "version 2",
+			influx: InfluxDBConfig{
+				Enabled: true, APIVersion: 2, URL: "http://localhost:8086",
+				Org: "example-org", Bucket: "modelrouter", Token: "secret",
+			},
+		},
+		{
+			name: "version 3",
+			influx: InfluxDBConfig{
+				Enabled: true, APIVersion: 3, URL: "http://localhost:8181",
+				Database: "modelrouter", Token: "secret",
+			},
+		},
+		{
+			name:    "enabled without API version",
+			influx:  InfluxDBConfig{Enabled: true, URL: "http://localhost:8181", Database: "modelrouter", Token: "secret"},
+			wantErr: true,
+		},
+		{
+			name:    "unsupported API version",
+			influx:  InfluxDBConfig{APIVersion: 1},
+			wantErr: true,
+		},
+		{
+			name:    "relative URL",
+			influx:  InfluxDBConfig{Enabled: true, APIVersion: 3, URL: "localhost:8181", Database: "modelrouter", Token: "secret"},
+			wantErr: true,
+		},
+		{
+			name:    "version 2 without org",
+			influx:  InfluxDBConfig{Enabled: true, APIVersion: 2, URL: "http://localhost:8086", Bucket: "modelrouter", Token: "secret"},
+			wantErr: true,
+		},
+		{
+			name:    "version 2 without bucket",
+			influx:  InfluxDBConfig{Enabled: true, APIVersion: 2, URL: "http://localhost:8086", Org: "example-org", Token: "secret"},
+			wantErr: true,
+		},
+		{
+			name:    "version 3 without database",
+			influx:  InfluxDBConfig{Enabled: true, APIVersion: 3, URL: "http://localhost:8181", Token: "secret"},
+			wantErr: true,
+		},
+		{
+			name:    "enabled without token",
+			influx:  InfluxDBConfig{Enabled: true, APIVersion: 3, URL: "http://localhost:8181", Database: "modelrouter"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfigWithInfluxDB(tt.influx)
+			err := cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidInfluxDBTuningAndTags(t *testing.T) {
+	for _, influx := range []InfluxDBConfig{
+		{BatchSize: -1},
+		{FlushIntervalSeconds: -1},
+		{QueueSize: -1},
+		{TimeoutSeconds: -1},
+		{Tags: map[string]string{"": "value"}},
+		{Tags: map[string]string{"environment": ""}},
+		{Tags: map[string]string{"bad\nkey": "value"}},
+		{Tags: map[string]string{"environment": "bad\rvalue"}},
+	} {
+		cfg := validConfigWithInfluxDB(influx)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected validation error for InfluxDB config %+v", influx)
+		}
+	}
+}
+
+func validConfigWithInfluxDB(influx InfluxDBConfig) *Config {
+	return &Config{
+		Metrics: MetricsConfig{InfluxDB: influx},
+		Models: map[string]ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]RouteGroupConfig{
+			"group": {
+				Strategy:  StrategyRoundRobin,
+				Endpoints: []EndpointConfig{{Name: "ep", BaseURL: "http://localhost:8081"}},
+			},
+		},
+	}
+}
+
 func TestSaveFileWritesLoadableConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := &Config{

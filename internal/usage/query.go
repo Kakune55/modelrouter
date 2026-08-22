@@ -91,10 +91,7 @@ func QueryRecords(cfg config.UsageLogConfig, query Query) (QueryResult, error) {
 	if query.Limit == 0 || query.Offset >= total {
 		return QueryResult{Total: total}, nil
 	}
-	end := query.Offset + query.Limit
-	if end > total {
-		end = total
-	}
+	end := min(query.Offset+query.Limit, total)
 	return QueryResult{Total: total, Items: records[query.Offset:end]}, nil
 }
 
@@ -185,7 +182,9 @@ func readRecordFile(path string, query Query) ([]Record, error) {
 		}
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

@@ -16,6 +16,14 @@ import (
 	"modelrouter/internal/router"
 )
 
+type staticExporterStatusProvider struct {
+	status metrics.InfluxDBExporterStatus
+}
+
+func (p staticExporterStatusProvider) Status() metrics.InfluxDBExporterStatus {
+	return p.status
+}
+
 func TestMetricsFiltersAndPaginates(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{
@@ -74,6 +82,38 @@ func TestMetricsFiltersAndPaginates(t *testing.T) {
 	}
 	if len(resp.Items) != 1 || resp.Items[0].Client != "client-a" {
 		t.Fatalf("items = %+v", resp.Items)
+	}
+}
+
+func TestOverviewIncludesMetricsExporterStatus(t *testing.T) {
+	store := router.NewStore(&config.Config{})
+	handler := NewHandler(store, metrics.NewRecorder(), "").WithMetricsExporterStatusProvider(staticExporterStatusProvider{
+		status: metrics.InfluxDBExporterStatus{
+			Enabled:            true,
+			PendingPoints:      2,
+			WrittenPoints:      10,
+			DroppedPoints:      1,
+			LastSuccessUnixSec: 123,
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/admin/overview", nil)
+	rr := httptest.NewRecorder()
+
+	handler.Overview(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	var response struct {
+		MetricsExporters struct {
+			InfluxDB metrics.InfluxDBExporterStatus `json:"influxdb"`
+		} `json:"metrics_exporters"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	status := response.MetricsExporters.InfluxDB
+	if !status.Enabled || status.PendingPoints != 2 || status.WrittenPoints != 10 || status.DroppedPoints != 1 || status.LastSuccessUnixSec != 123 {
+		t.Fatalf("exporter status = %+v", status)
 	}
 }
 
@@ -195,7 +235,10 @@ func TestAdminKeyPermissions(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(store, metrics.NewRecorder(), configPath)
+	var updatedConfig *config.Config
+	handler := NewHandler(store, metrics.NewRecorder(), configPath).WithConfigUpdateHook(func(cfg *config.Config) {
+		updatedConfig = cfg
+	})
 
 	readReq := httptest.NewRequest(http.MethodGet, "/admin/metrics", nil)
 	readReq.Header.Set("Authorization", "Bearer read-token")
@@ -205,13 +248,16 @@ func TestAdminKeyPermissions(t *testing.T) {
 		t.Fatalf("read status = %d body = %s", readResp.Code, readResp.Body.String())
 	}
 
-	writeBody := []byte(`{"models":{"model-a":{"route_group":"group"}},"route_groups":{"group":{"strategy":"round_robin","endpoints":[{"name":"endpoint","base_url":"http://127.0.0.1"}]}}}`)
+	writeBody := []byte(`{"metrics":{"influxdb":{"enabled":true,"api_version":3,"url":"http://localhost:8181","database":"updated","token":"secret"}},"models":{"model-a":{"route_group":"group"}},"route_groups":{"group":{"strategy":"round_robin","endpoints":[{"name":"endpoint","base_url":"http://127.0.0.1"}]}}}`)
 	blockedReq := httptest.NewRequest(http.MethodPut, "/admin/config", bytes.NewReader(writeBody))
 	blockedReq.Header.Set("Authorization", "Bearer read-token")
 	blockedResp := httptest.NewRecorder()
 	handler.Config(blockedResp, blockedReq)
 	if blockedResp.Code != http.StatusForbidden {
 		t.Fatalf("blocked status = %d body = %s", blockedResp.Code, blockedResp.Body.String())
+	}
+	if updatedConfig != nil {
+		t.Fatal("config update hook called for blocked request")
 	}
 
 	writeReq := httptest.NewRequest(http.MethodPut, "/admin/config", bytes.NewReader(writeBody))
@@ -220,6 +266,9 @@ func TestAdminKeyPermissions(t *testing.T) {
 	handler.Config(writeResp, writeReq)
 	if writeResp.Code != http.StatusOK {
 		t.Fatalf("write status = %d body = %s", writeResp.Code, writeResp.Body.String())
+	}
+	if updatedConfig == nil || updatedConfig.Metrics.InfluxDB.Database != "updated" {
+		t.Fatalf("updated config = %+v", updatedConfig)
 	}
 	if _, err := config.LoadFile(configPath); err != nil {
 		t.Fatalf("load persisted config: %v", err)
@@ -334,6 +383,12 @@ func TestAdminConfigRedactsSecrets(t *testing.T) {
 				{Name: "client", Key: "client-token", AccessGroup: "default"},
 			},
 		},
+		Metrics: config.MetricsConfig{
+			InfluxDB: config.InfluxDBConfig{
+				Enabled: true, APIVersion: 3, URL: "http://localhost:8181",
+				Database: "modelrouter", Token: "influxdb-token",
+			},
+		},
 		AccessGroups: map[string]config.AccessGroupConfig{
 			"default": {},
 		},
@@ -360,7 +415,7 @@ func TestAdminConfigRedactsSecrets(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rr.Code, body)
 	}
-	for _, secret := range []string{"admin-token", "dashboard-token", "client-token", "upstream-token"} {
+	for _, secret := range []string{"admin-token", "dashboard-token", "client-token", "upstream-token", "influxdb-token"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("response leaked secret %q: %s", secret, body)
 		}

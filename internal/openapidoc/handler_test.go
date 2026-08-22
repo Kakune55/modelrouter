@@ -20,13 +20,21 @@ func TestHandlerServesDocument(t *testing.T) {
 		t.Fatalf("content-type = %s", got)
 	}
 	var doc struct {
-		OpenAPI string `json:"openapi"`
+		OpenAPI    string `json:"openapi"`
+		Components struct {
+			Schemas map[string]json.RawMessage `json:"schemas"`
+		} `json:"components"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 	if doc.OpenAPI != "3.1.0" {
 		t.Fatalf("openapi = %s", doc.OpenAPI)
+	}
+	for _, schema := range []string{"InfluxDBConfig", "InfluxDBExporterStatus"} {
+		if _, ok := doc.Components.Schemas[schema]; !ok {
+			t.Fatalf("missing schema %q", schema)
+		}
 	}
 }
 

@@ -80,7 +80,11 @@ func writeTestRecords(t *testing.T, dir, name string, records []Record) {
 	if err != nil {
 		t.Fatalf("create records: %v", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close records: %v", err)
+		}
+	}()
 	encoder := json.NewEncoder(file)
 	for _, record := range records {
 		if err := encoder.Encode(record); err != nil {

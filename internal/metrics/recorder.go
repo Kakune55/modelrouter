@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"hash/fnv"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -60,17 +61,24 @@ type Counter struct {
 type Event struct {
 	Client             string
 	Model              string
+	UpstreamModel      string
 	RouteGroup         string
 	Endpoint           string
+	APIEndpoint        string
 	StatusCode         int
 	Duration           time.Duration
+	UpstreamDuration   time.Duration
 	BytesOut           int64
 	PromptTokens       int64
 	OutputTokens       int64
 	TotalTokens        int64
+	CacheReadTokens    int64
+	ReasoningTokens    int64
+	RetryCount         int
 	Streaming          bool
 	TTFT               time.Duration
 	GenerationDuration time.Duration
+	CompletedAt        time.Time
 	Err                error
 }
 
@@ -309,20 +317,14 @@ func (r *Recorder) shardFor(key string) *recorderShard {
 
 func cloneCounter(counter *Counter) Counter {
 	copy := *counter
-	copy.StatusCodes = make(map[int]int64, len(counter.StatusCodes))
-	for code, count := range counter.StatusCodes {
-		copy.StatusCodes[code] = count
-	}
+	copy.StatusCodes = maps.Clone(counter.StatusCodes)
 	updateDerived(&copy)
 	return copy
 }
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
 	clone := snapshot
-	clone.Windows = make(map[string]WindowSummary, len(snapshot.Windows))
-	for key, value := range snapshot.Windows {
-		clone.Windows[key] = value
-	}
+	clone.Windows = maps.Clone(snapshot.Windows)
 	clone.Items = cloneCounters(snapshot.Items)
 	clone.ByClient = cloneCounters(snapshot.ByClient)
 	clone.ByModel = cloneCounters(snapshot.ByModel)

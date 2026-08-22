@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,12 +32,13 @@ const (
 type Config struct {
 	Models       map[string]ModelConfig       `json:"models"`
 	RouteGroups  map[string]RouteGroupConfig  `json:"route_groups"`
-	HTTP         HTTPConfig                   `json:"http,omitempty"`
-	Admin        AdminConfig                  `json:"admin,omitempty"`
-	Auth         AuthConfig                   `json:"auth,omitempty"`
+	HTTP         HTTPConfig                   `json:"http"`
+	Admin        AdminConfig                  `json:"admin"`
+	Auth         AuthConfig                   `json:"auth"`
 	AccessGroups map[string]AccessGroupConfig `json:"access_groups,omitempty"`
-	Features     FeaturesConfig               `json:"features,omitempty"`
-	UsageLog     UsageLogConfig               `json:"usage_log,omitempty"`
+	Features     FeaturesConfig               `json:"features"`
+	UsageLog     UsageLogConfig               `json:"usage_log"`
+	Metrics      MetricsConfig                `json:"metrics"`
 }
 
 type HTTPConfig struct {
@@ -67,6 +69,25 @@ type UsageLogConfig struct {
 	RetentionHours int    `json:"retention_hours,omitempty"`
 }
 
+type MetricsConfig struct {
+	InfluxDB InfluxDBConfig `json:"influxdb"`
+}
+
+type InfluxDBConfig struct {
+	Enabled              bool              `json:"enabled,omitempty"`
+	APIVersion           int               `json:"api_version,omitempty"`
+	URL                  string            `json:"url,omitempty"`
+	Org                  string            `json:"org,omitempty"`
+	Bucket               string            `json:"bucket,omitempty"`
+	Database             string            `json:"database,omitempty"`
+	Token                string            `json:"token,omitempty"`
+	Tags                 map[string]string `json:"tags,omitempty"`
+	BatchSize            int               `json:"batch_size,omitempty"`
+	FlushIntervalSeconds int               `json:"flush_interval_seconds,omitempty"`
+	QueueSize            int               `json:"queue_size,omitempty"`
+	TimeoutSeconds       int               `json:"timeout_seconds,omitempty"`
+}
+
 type AuthConfig struct {
 	Enabled bool              `json:"enabled,omitempty"`
 	Keys    []ClientKeyConfig `json:"keys,omitempty"`
@@ -81,7 +102,7 @@ type ClientKeyConfig struct {
 type AccessGroupConfig struct {
 	AllowedModels []string        `json:"allowed_models,omitempty"`
 	BlockedModels []string        `json:"blocked_models,omitempty"`
-	RateLimit     RateLimitConfig `json:"rate_limit,omitempty"`
+	RateLimit     RateLimitConfig `json:"rate_limit"`
 }
 
 type RateLimitConfig struct {
@@ -96,7 +117,7 @@ type ModelConfig struct {
 
 type RouteGroupConfig struct {
 	Strategy      string              `json:"strategy"`
-	PassiveHealth PassiveHealthConfig `json:"passive_health,omitempty"`
+	PassiveHealth PassiveHealthConfig `json:"passive_health"`
 	Endpoints     []EndpointConfig    `json:"endpoints"`
 }
 
@@ -214,6 +235,9 @@ func (c *Config) Validate() error {
 	if c.UsageLog.RetentionHours < 0 {
 		return errors.New("usage_log.retention_hours must not be negative")
 	}
+	if err := c.validateInfluxDB(); err != nil {
+		return err
+	}
 	if err := c.validateAdmin(); err != nil {
 		return err
 	}
@@ -283,6 +307,65 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("route_group %q endpoint %q max_concurrency must not be negative", name, ep.Name)
 			}
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateInfluxDB() error {
+	influx := c.Metrics.InfluxDB
+	if influx.BatchSize < 0 {
+		return errors.New("metrics.influxdb.batch_size must not be negative")
+	}
+	if influx.FlushIntervalSeconds < 0 {
+		return errors.New("metrics.influxdb.flush_interval_seconds must not be negative")
+	}
+	if influx.QueueSize < 0 {
+		return errors.New("metrics.influxdb.queue_size must not be negative")
+	}
+	if influx.TimeoutSeconds < 0 {
+		return errors.New("metrics.influxdb.timeout_seconds must not be negative")
+	}
+	if influx.APIVersion != 0 && influx.APIVersion != 2 && influx.APIVersion != 3 {
+		return errors.New("metrics.influxdb.api_version must be 2 or 3")
+	}
+	for key, value := range influx.Tags {
+		if strings.TrimSpace(key) == "" {
+			return errors.New("metrics.influxdb.tags must not contain an empty key")
+		}
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("metrics.influxdb.tags[%q] must not be empty", key)
+		}
+		if strings.ContainsAny(key, "\r\n") || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("metrics.influxdb.tags[%q] must not contain newlines", key)
+		}
+	}
+	if !influx.Enabled {
+		return nil
+	}
+	if influx.APIVersion != 2 && influx.APIVersion != 3 {
+		return errors.New("metrics.influxdb.api_version must be 2 or 3 when enabled")
+	}
+	if strings.TrimSpace(influx.URL) == "" {
+		return errors.New("metrics.influxdb.url must not be empty when enabled")
+	}
+	parsedURL, err := url.Parse(influx.URL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		return errors.New("metrics.influxdb.url must be an absolute HTTP or HTTPS URL")
+	}
+	if strings.TrimSpace(influx.Token) == "" {
+		return errors.New("metrics.influxdb.token must not be empty when enabled")
+	}
+	if influx.APIVersion == 2 {
+		if strings.TrimSpace(influx.Org) == "" {
+			return errors.New("metrics.influxdb.org must not be empty for API version 2")
+		}
+		if strings.TrimSpace(influx.Bucket) == "" {
+			return errors.New("metrics.influxdb.bucket must not be empty for API version 2")
+		}
+		return nil
+	}
+	if strings.TrimSpace(influx.Database) == "" {
+		return errors.New("metrics.influxdb.database must not be empty for API version 3")
 	}
 	return nil
 }
@@ -418,6 +501,34 @@ func (c *Config) MaxResponseBodyBytes() int64 {
 		return 64 << 20
 	}
 	return c.HTTP.MaxResponseBodyBytes
+}
+
+func (c InfluxDBConfig) EffectiveBatchSize() int {
+	if c.BatchSize <= 0 {
+		return 100
+	}
+	return c.BatchSize
+}
+
+func (c InfluxDBConfig) FlushInterval() time.Duration {
+	if c.FlushIntervalSeconds <= 0 {
+		return time.Second
+	}
+	return time.Duration(c.FlushIntervalSeconds) * time.Second
+}
+
+func (c InfluxDBConfig) EffectiveQueueSize() int {
+	if c.QueueSize <= 0 {
+		return 4096
+	}
+	return c.QueueSize
+}
+
+func (c InfluxDBConfig) RequestTimeout() time.Duration {
+	if c.TimeoutSeconds <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
 func validStrategy(strategy string) bool {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -21,11 +22,17 @@ type ClientLimitProvider interface {
 	ClientLimitStatus() any
 }
 
+type MetricsExporterStatusProvider interface {
+	Status() metrics.InfluxDBExporterStatus
+}
+
 type Handler struct {
 	store               *router.Store
 	recorder            *metrics.Recorder
 	configPath          string
 	clientLimitProvider ClientLimitProvider
+	configUpdateHook    func(*config.Config)
+	exporterStatus      MetricsExporterStatusProvider
 }
 
 func NewHandler(store *router.Store, recorder *metrics.Recorder, configPath string) *Handler {
@@ -34,6 +41,18 @@ func NewHandler(store *router.Store, recorder *metrics.Recorder, configPath stri
 
 func (h *Handler) WithClientLimitProvider(provider ClientLimitProvider) *Handler {
 	h.clientLimitProvider = provider
+	return h
+}
+
+// WithConfigUpdateHook 注册配置成功落盘并生效后的同步通知函数。
+func (h *Handler) WithConfigUpdateHook(hook func(*config.Config)) *Handler {
+	h.configUpdateHook = hook
+	return h
+}
+
+// WithMetricsExporterStatusProvider 注册指标导出器运行状态提供方。
+func (h *Handler) WithMetricsExporterStatusProvider(provider MetricsExporterStatusProvider) *Handler {
+	h.exporterStatus = provider
 	return h
 }
 
@@ -62,7 +81,7 @@ func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
 			writeAdminError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		h.store.Update(cfg)
+		h.applyConfig(cfg)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "persisted": "true"})
 	default:
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -327,7 +346,7 @@ func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h.store.Update(cfg)
+	h.applyConfig(cfg)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
@@ -340,13 +359,19 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stats := h.recorder.Snapshot()
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"generated_at_unix_sec": stats.GeneratedAtUnixSec,
 		"summary":               stats.Summary,
 		"windows":               stats.Windows,
 		"health":                h.store.Get().Health(),
 		"limits":                h.clientLimits(),
-	})
+	}
+	if h.exporterStatus != nil {
+		response["metrics_exporters"] = map[string]any{
+			"influxdb": h.exporterStatus.Status(),
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -587,6 +612,10 @@ func redactedConfig(cfg *config.Config) *config.Config {
 		return nil
 	}
 	clone := *cfg
+	if clone.Metrics.InfluxDB.Token != "" {
+		clone.Metrics.InfluxDB.Token = "********"
+	}
+	clone.Metrics.InfluxDB.Tags = cloneStringMap(cfg.Metrics.InfluxDB.Tags)
 	if clone.Admin.Token != "" {
 		clone.Admin.Token = "********"
 	}
@@ -604,9 +633,7 @@ func redactedConfig(cfg *config.Config) *config.Config {
 		}
 	}
 	clone.Models = make(map[string]config.ModelConfig, len(cfg.Models))
-	for key, value := range cfg.Models {
-		clone.Models[key] = value
-	}
+	maps.Copy(clone.Models, cfg.Models)
 	clone.AccessGroups = make(map[string]config.AccessGroupConfig, len(cfg.AccessGroups))
 	for key, value := range cfg.AccessGroups {
 		value.AllowedModels = append([]string(nil), value.AllowedModels...)
@@ -713,10 +740,7 @@ func paginateCounters(items []metrics.Counter, query metricsQuery) []metrics.Cou
 	if query.Offset >= len(items) || query.Limit == 0 {
 		return nil
 	}
-	end := query.Offset + query.Limit
-	if end > len(items) {
-		end = len(items)
-	}
+	end := min(query.Offset+query.Limit, len(items))
 	return items[query.Offset:end]
 }
 
@@ -878,8 +902,15 @@ func (h *Handler) updateConfig(mutator func(*config.Config)) error {
 	if err := config.SaveFile(h.configPath, next); err != nil {
 		return configUpdateError{status: http.StatusInternalServerError, err: err}
 	}
-	h.store.Update(next)
+	h.applyConfig(next)
 	return nil
+}
+
+func (h *Handler) applyConfig(cfg *config.Config) {
+	h.store.Update(cfg)
+	if h.configUpdateHook != nil {
+		h.configUpdateHook(cfg)
+	}
 }
 
 type configUpdateError struct {
@@ -896,15 +927,14 @@ func cloneConfig(cfg *config.Config) *config.Config {
 		return &config.Config{}
 	}
 	clone := *cfg
+	clone.Metrics.InfluxDB.Tags = cloneStringMap(cfg.Metrics.InfluxDB.Tags)
 	clone.Admin.Keys = append([]config.AdminKeyConfig(nil), cfg.Admin.Keys...)
 	for i := range clone.Admin.Keys {
 		clone.Admin.Keys[i].Permissions = append([]string(nil), cfg.Admin.Keys[i].Permissions...)
 	}
 	clone.Auth.Keys = append([]config.ClientKeyConfig(nil), cfg.Auth.Keys...)
 	clone.Models = make(map[string]config.ModelConfig, len(cfg.Models))
-	for key, value := range cfg.Models {
-		clone.Models[key] = value
-	}
+	maps.Copy(clone.Models, cfg.Models)
 	clone.AccessGroups = make(map[string]config.AccessGroupConfig, len(cfg.AccessGroups))
 	for key, value := range cfg.AccessGroups {
 		value.AllowedModels = append([]string(nil), value.AllowedModels...)
@@ -917,15 +947,17 @@ func cloneConfig(cfg *config.Config) *config.Config {
 		for i := range value.Endpoints {
 			if value.Endpoints[i].Headers != nil {
 				headers := make(map[string]string, len(value.Endpoints[i].Headers))
-				for header, headerValue := range value.Endpoints[i].Headers {
-					headers[header] = headerValue
-				}
+				maps.Copy(headers, value.Endpoints[i].Headers)
 				value.Endpoints[i].Headers = headers
 			}
 		}
 		clone.RouteGroups[key] = value
 	}
 	return &clone
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	return maps.Clone(source)
 }
 
 func decodeAdminJSON(w http.ResponseWriter, r *http.Request, out any) bool {

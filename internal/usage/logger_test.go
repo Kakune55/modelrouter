@@ -101,7 +101,7 @@ func TestCloseFlushesQueuedRecords(t *testing.T) {
 	dir := t.TempDir()
 	logger := NewLogger()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := logger.Record(config.UsageLogConfig{Enabled: true, Dir: dir}, metrics.Event{
 			Client: "client-a",
 			Model:  "model-a",
