@@ -38,17 +38,18 @@ type InfluxDBExporter struct {
 	flushInterval func(config.InfluxDBConfig) time.Duration
 	retryDelays   []time.Duration
 
-	mu        sync.Mutex
-	config    config.InfluxDBConfig
-	queue     []queuedInfluxPoint
-	status    InfluxDBExporterStatus
-	closed    bool
-	wake      chan struct{}
-	done      chan struct{}
-	finished  chan struct{}
-	closeOnce sync.Once
-	runCtx    context.Context
-	cancel    context.CancelFunc
+	mu                sync.Mutex
+	config            config.InfluxDBConfig
+	queue             []queuedInfluxPoint
+	status            InfluxDBExporterStatus
+	lastPointUnixNano int64
+	closed            bool
+	wake              chan struct{}
+	done              chan struct{}
+	finished          chan struct{}
+	closeOnce         sync.Once
+	runCtx            context.Context
+	cancel            context.CancelFunc
 }
 
 type queuedInfluxPoint struct {
@@ -124,7 +125,7 @@ func (e *InfluxDBExporter) Record(ev Event) {
 		return
 	}
 
-	line, err := EncodeInfluxLine(ev, cfg.Tags, e.now())
+	line, err := EncodeInfluxLine(ev, cfg.Tags, e.uniquePointTime(ev.CompletedAt))
 	if err != nil {
 		e.recordEncodingFailure(err)
 		return
@@ -146,6 +147,21 @@ func (e *InfluxDBExporter) Record(ev Event) {
 	e.status.PendingPoints++
 	e.mu.Unlock()
 	e.signal()
+}
+
+// uniquePointTime 保留请求完成时间的纳秒精度，并在时钟值重复或回拨时分配递增 1ns 的时间戳。
+func (e *InfluxDBExporter) uniquePointTime(completedAt time.Time) time.Time {
+	if completedAt.IsZero() {
+		completedAt = e.now()
+	}
+	candidate := completedAt.UnixNano()
+	e.mu.Lock()
+	if candidate <= e.lastPointUnixNano {
+		candidate = e.lastPointUnixNano + 1
+	}
+	e.lastPointUnixNano = candidate
+	e.mu.Unlock()
+	return time.Unix(0, candidate)
 }
 
 func (e *InfluxDBExporter) Status() InfluxDBExporterStatus {

@@ -3,6 +3,8 @@ package metrics
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -71,6 +73,34 @@ func TestInfluxDBExporterFlushesAtBatchSize(t *testing.T) {
 	attempts, batches := writer.snapshot()
 	if attempts != 1 || len(batches) != 1 || len(batches[0].lines) != 2 {
 		t.Fatalf("attempts = %d batches = %+v", attempts, batches)
+	}
+}
+
+func TestInfluxDBExporterMakesRepeatedCompletionTimesUnique(t *testing.T) {
+	writer := &fakeInfluxBatchWriter{called: make(chan struct{}, 1)}
+	cfg := testInfluxConfig(2)
+	fixed := time.Unix(1_700_000_000, 123)
+	exporter := newInfluxDBExporter(cfg, writer, influxExporterOptions{
+		now:           func() time.Time { return fixed },
+		flushInterval: func(config.InfluxDBConfig) time.Duration { return time.Second },
+	})
+	t.Cleanup(func() { closeInfluxExporter(t, exporter) })
+
+	exporter.Record(Event{StatusCode: 200, CompletedAt: fixed})
+	exporter.Record(Event{StatusCode: 200, CompletedAt: fixed})
+	waitInfluxWriterCall(t, writer.called)
+	waitInfluxStatus(t, exporter, func(status InfluxDBExporterStatus) bool {
+		return status.WrittenPoints == 2
+	})
+
+	_, batches := writer.snapshot()
+	if len(batches) != 1 || len(batches[0].lines) != 2 {
+		t.Fatalf("batches = %+v", batches)
+	}
+	first := influxLineTimestamp(t, batches[0].lines[0])
+	second := influxLineTimestamp(t, batches[0].lines[1])
+	if first != fixed.UnixNano() || second != first+1 {
+		t.Fatalf("timestamps = %d, %d", first, second)
 	}
 }
 
@@ -273,4 +303,17 @@ func closeInfluxExporter(t *testing.T, exporter *InfluxDBExporter) {
 	if err := exporter.Close(ctx); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+}
+
+func influxLineTimestamp(t *testing.T, line string) int64 {
+	t.Helper()
+	index := strings.LastIndexByte(line, ' ')
+	if index < 0 {
+		t.Fatalf("line has no timestamp: %s", line)
+	}
+	value, err := strconv.ParseInt(line[index+1:], 10, 64)
+	if err != nil {
+		t.Fatalf("parse timestamp: %v", err)
+	}
+	return value
 }
