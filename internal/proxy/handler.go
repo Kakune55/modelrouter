@@ -24,9 +24,14 @@ var errUpstreamIdleTimeout = errors.New("upstream idle timeout")
 type Handler struct {
 	store         *router.Store
 	recorder      *metrics.Recorder
+	metricsExport eventExporter
 	usageLogger   *usage.Logger
 	client        *http.Client
 	clientLimiter *clientLimiter
+}
+
+type eventExporter interface {
+	Record(metrics.Event)
 }
 
 func NewHandler(store *router.Store, recorder *metrics.Recorder) *Handler {
@@ -39,6 +44,12 @@ func NewHandler(store *router.Store, recorder *metrics.Recorder) *Handler {
 			Timeout: 0,
 		},
 	}
+}
+
+// WithMetricsExporter 注册请求完成事件的旁路导出器。
+func (h *Handler) WithMetricsExporter(exporter eventExporter) *Handler {
+	h.metricsExport = exporter
+	return h
 }
 
 func (h *Handler) Close() {
@@ -133,6 +144,9 @@ func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPa
 	}
 	h.recorder.Record(event)
 	_ = h.usageLogger.Record(snap.Config.UsageLog, event)
+	if h.metricsExport != nil {
+		h.metricsExport.Record(event)
+	}
 
 	if err != nil {
 		if responseStats.ResponseStarted {

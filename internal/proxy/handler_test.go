@@ -16,6 +16,14 @@ import (
 	"modelrouter/internal/router"
 )
 
+type recordingEventExporter struct {
+	events []metrics.Event
+}
+
+func (e *recordingEventExporter) Record(event metrics.Event) {
+	e.events = append(e.events, event)
+}
+
 func TestChatCompletionsProxiesRequest(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
@@ -63,7 +71,8 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 		},
 	})
 	recorder := metrics.NewRecorder()
-	handler := NewHandler(store, recorder)
+	exporter := &recordingEventExporter{}
+	handler := NewHandler(store, recorder).WithMetricsExporter(exporter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -81,6 +90,12 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 	}
 	if stats.Items[0].TotalTokens != 7 {
 		t.Fatalf("total tokens = %d", stats.Items[0].TotalTokens)
+	}
+	if len(exporter.events) != 1 {
+		t.Fatalf("exported events = %+v", exporter.events)
+	}
+	if event := exporter.events[0]; event.Client != "anonymous" || event.Model != "demo" || event.Endpoint != "upstream" || event.TotalTokens != 7 {
+		t.Fatalf("exported event = %+v", event)
 	}
 }
 

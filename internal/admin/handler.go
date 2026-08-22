@@ -27,6 +27,7 @@ type Handler struct {
 	recorder            *metrics.Recorder
 	configPath          string
 	clientLimitProvider ClientLimitProvider
+	configUpdateHook    func(*config.Config)
 }
 
 func NewHandler(store *router.Store, recorder *metrics.Recorder, configPath string) *Handler {
@@ -35,6 +36,12 @@ func NewHandler(store *router.Store, recorder *metrics.Recorder, configPath stri
 
 func (h *Handler) WithClientLimitProvider(provider ClientLimitProvider) *Handler {
 	h.clientLimitProvider = provider
+	return h
+}
+
+// WithConfigUpdateHook 注册配置成功落盘并生效后的同步通知函数。
+func (h *Handler) WithConfigUpdateHook(hook func(*config.Config)) *Handler {
+	h.configUpdateHook = hook
 	return h
 }
 
@@ -63,7 +70,7 @@ func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
 			writeAdminError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		h.store.Update(cfg)
+		h.applyConfig(cfg)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "persisted": "true"})
 	default:
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -328,7 +335,7 @@ func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h.store.Update(cfg)
+	h.applyConfig(cfg)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
@@ -878,8 +885,15 @@ func (h *Handler) updateConfig(mutator func(*config.Config)) error {
 	if err := config.SaveFile(h.configPath, next); err != nil {
 		return configUpdateError{status: http.StatusInternalServerError, err: err}
 	}
-	h.store.Update(next)
+	h.applyConfig(next)
 	return nil
+}
+
+func (h *Handler) applyConfig(cfg *config.Config) {
+	h.store.Update(cfg)
+	if h.configUpdateHook != nil {
+		h.configUpdateHook(cfg)
+	}
 }
 
 type configUpdateError struct {

@@ -195,7 +195,10 @@ func TestAdminKeyPermissions(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(store, metrics.NewRecorder(), configPath)
+	var updatedConfig *config.Config
+	handler := NewHandler(store, metrics.NewRecorder(), configPath).WithConfigUpdateHook(func(cfg *config.Config) {
+		updatedConfig = cfg
+	})
 
 	readReq := httptest.NewRequest(http.MethodGet, "/admin/metrics", nil)
 	readReq.Header.Set("Authorization", "Bearer read-token")
@@ -205,13 +208,16 @@ func TestAdminKeyPermissions(t *testing.T) {
 		t.Fatalf("read status = %d body = %s", readResp.Code, readResp.Body.String())
 	}
 
-	writeBody := []byte(`{"models":{"model-a":{"route_group":"group"}},"route_groups":{"group":{"strategy":"round_robin","endpoints":[{"name":"endpoint","base_url":"http://127.0.0.1"}]}}}`)
+	writeBody := []byte(`{"metrics":{"influxdb":{"enabled":true,"api_version":3,"url":"http://localhost:8181","database":"updated","token":"secret"}},"models":{"model-a":{"route_group":"group"}},"route_groups":{"group":{"strategy":"round_robin","endpoints":[{"name":"endpoint","base_url":"http://127.0.0.1"}]}}}`)
 	blockedReq := httptest.NewRequest(http.MethodPut, "/admin/config", bytes.NewReader(writeBody))
 	blockedReq.Header.Set("Authorization", "Bearer read-token")
 	blockedResp := httptest.NewRecorder()
 	handler.Config(blockedResp, blockedReq)
 	if blockedResp.Code != http.StatusForbidden {
 		t.Fatalf("blocked status = %d body = %s", blockedResp.Code, blockedResp.Body.String())
+	}
+	if updatedConfig != nil {
+		t.Fatal("config update hook called for blocked request")
 	}
 
 	writeReq := httptest.NewRequest(http.MethodPut, "/admin/config", bytes.NewReader(writeBody))
@@ -220,6 +226,9 @@ func TestAdminKeyPermissions(t *testing.T) {
 	handler.Config(writeResp, writeReq)
 	if writeResp.Code != http.StatusOK {
 		t.Fatalf("write status = %d body = %s", writeResp.Code, writeResp.Body.String())
+	}
+	if updatedConfig == nil || updatedConfig.Metrics.InfluxDB.Database != "updated" {
+		t.Fatalf("updated config = %+v", updatedConfig)
 	}
 	if _, err := config.LoadFile(configPath); err != nil {
 		t.Fatalf("load persisted config: %v", err)
