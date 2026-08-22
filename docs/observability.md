@@ -117,21 +117,32 @@ curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public
 内建 tags：
 
 - `client`
-- `model`
+- `api_endpoint`：客户端访问的 API，例如 `/v1/chat/completions`
+- `requested_model`：客户端请求中的公开模型名
+- `model`：根据 endpoint、model 配置优先级最终发送给上游的模型名
 - `route_group`
-- `endpoint`
+- `backend`：最终响应请求或最后实际尝试的上游实例；没有发起上游请求时省略
 - `status_code`
+- `stream`
 
 主要 fields：
 
 - `requests`，固定为整数 `1`
-- `duration_ms`、`bytes_out`
-- `prompt_tokens`、`output_tokens`、`total_tokens`
-- `streaming`、`success`
-- `ttft_ms`
-- `end_to_end_token_rate`、`generation_token_rate`
+- `duration_ms`：从请求进入代理处理到完成的总耗时
+- `upstream_duration_ms`：所有实际上游尝试的累计耗时
+- `bytes_out`
+- `input_tokens`、`output_tokens`、`total_tokens`
+- `cache_read_tokens`、`reasoning_tokens`
+- `retry_count`：除首次实际上游请求以外的额外尝试次数
+- `success`
+- `ttft_ms`、`generation_ms`
+- `end_to_end_tokens_per_second`、`tokens_per_second`
 
-不可计算的 TTFT 或 token 速率字段会省略。错误详情、prompt、messages、响应正文和任何 API token 都不会写入 InfluxDB。
+一次完成的代理请求只写入一个 point，上述数值作为同一个 point 的 fields。`ttft_ms`、`generation_ms` 和 token 速率仅在流式响应能够识别首个内容事件时写入；`cache_read_tokens`、`reasoning_tokens` 在上游没有返回对应 usage details 时为 `0`。错误详情、prompt、messages、响应正文和任何 API token 都不会写入 InfluxDB。
+
+point timestamp 使用请求完成时间的 Unix 纳秒值。v2 写入使用 `precision=ns`，v3 使用 `precision=nanosecond`，不会截断到秒；同一进程遇到相同或回拨的时钟值时会递增 `1ns`，避免相同 tag set 的并发请求合并。多实例共同写入时建议通过静态 tag 配置不同的 `instance` 值。
+
+TTFT 从请求进入代理处理开始计算，因此包含认证、路由选择和前序失败尝试；`tokens_per_second` 使用 `output_tokens / generation_ms`，`end_to_end_tokens_per_second` 使用 `output_tokens / duration_ms`。非流式响应目前无法准确取得 TTFT 和 generation duration。
 
 推送使用有界内存队列，不在代理请求路径中等待网络写入。默认攒满 `100` 条或等待 `1` 秒后写入；`408`、`429`、`5xx` 和网络错误最多重试两次，其他 HTTP 错误直接丢弃。队列满、编码失败或最终写入失败都会计入 exporter 状态，但不会改变客户端响应。
 
@@ -158,6 +169,8 @@ curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public
 - InfluxDB 3：对配置的 database 执行 `SELECT * FROM modelrouter_request ORDER BY time DESC LIMIT 10`。
 - InfluxDB 2：在配置的 bucket 中按 `_measurement == "modelrouter_request"` 查询。
 - `/admin/overview`：确认 `written_points` 增加且 `dropped_points`、`failed_batches` 保持为 `0`。
+
+InfluxDB 2 Data Explorer 默认生成的 `aggregateWindow()` 会将 `_time` 对齐到窗口边界。检查请求级原始时间戳时应移除聚合函数，直接查询 measurement。
 
 ## 用量日志
 

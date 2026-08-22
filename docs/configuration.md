@@ -242,7 +242,7 @@ InfluxDB 2 使用 `/api/v2/write` 端点：
 - `org`、`bucket`：InfluxDB 2 必填。
 - `database`：InfluxDB 3 必填。
 - `token`：写入 token，启用时必填；通过 Admin API 读取配置时会被脱敏。
-- `tags`：附加到每个数据点的静态 tag，例如 `instance`、`environment`。内建的 `client`、`model`、`route_group`、`endpoint`、`status_code` 优先。
+- `tags`：附加到每个数据点的静态 tag，例如 `instance`、`environment`。内建的 `client`、`api_endpoint`、`requested_model`、`model`、`route_group`、`backend`、`status_code`、`stream` 优先。
 - `batch_size`：每批最大数据点数，省略或设为 `0` 时默认 `100`。
 - `flush_interval_seconds`：未达到批量大小时的刷新间隔，省略或设为 `0` 时默认 `1` 秒。
 - `queue_size`：进程内最多待处理数据点数，省略或设为 `0` 时默认 `4096`。
