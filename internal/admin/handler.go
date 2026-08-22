@@ -22,12 +22,17 @@ type ClientLimitProvider interface {
 	ClientLimitStatus() any
 }
 
+type MetricsExporterStatusProvider interface {
+	Status() metrics.InfluxDBExporterStatus
+}
+
 type Handler struct {
 	store               *router.Store
 	recorder            *metrics.Recorder
 	configPath          string
 	clientLimitProvider ClientLimitProvider
 	configUpdateHook    func(*config.Config)
+	exporterStatus      MetricsExporterStatusProvider
 }
 
 func NewHandler(store *router.Store, recorder *metrics.Recorder, configPath string) *Handler {
@@ -42,6 +47,12 @@ func (h *Handler) WithClientLimitProvider(provider ClientLimitProvider) *Handler
 // WithConfigUpdateHook 注册配置成功落盘并生效后的同步通知函数。
 func (h *Handler) WithConfigUpdateHook(hook func(*config.Config)) *Handler {
 	h.configUpdateHook = hook
+	return h
+}
+
+// WithMetricsExporterStatusProvider 注册指标导出器运行状态提供方。
+func (h *Handler) WithMetricsExporterStatusProvider(provider MetricsExporterStatusProvider) *Handler {
+	h.exporterStatus = provider
 	return h
 }
 
@@ -348,13 +359,19 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stats := h.recorder.Snapshot()
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"generated_at_unix_sec": stats.GeneratedAtUnixSec,
 		"summary":               stats.Summary,
 		"windows":               stats.Windows,
 		"health":                h.store.Get().Health(),
 		"limits":                h.clientLimits(),
-	})
+	}
+	if h.exporterStatus != nil {
+		response["metrics_exporters"] = map[string]any{
+			"influxdb": h.exporterStatus.Status(),
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {

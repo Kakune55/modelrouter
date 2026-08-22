@@ -34,6 +34,7 @@ func main() {
 	proxyHandler := proxy.NewHandler(store, recorder).WithMetricsExporter(influxExporter)
 	adminHandler := admin.NewHandler(store, recorder, *configPath).
 		WithClientLimitProvider(proxyHandler).
+		WithMetricsExporterStatusProvider(influxExporter).
 		WithConfigUpdateHook(func(next *config.Config) {
 			influxExporter.Reconfigure(next.Metrics.InfluxDB)
 		})

@@ -4,7 +4,7 @@ modelrouter 在内存中记录请求数、延迟、token、流式响应和 endpo
 
 ## 指标接口
 
-- `/admin/overview`：累计 summary、最近窗口和 endpoint 健康状态。
+- `/admin/overview`：累计 summary、最近窗口、endpoint 健康状态和指标导出器状态。
 - `/admin/health`：endpoint 健康、冷却和当前并发状态。
 - `/admin/limits`：客户端限流配置和当前状态。
 - `/admin/metrics`：按 client、model、route group 和 endpoint 组合的累计指标。
@@ -110,6 +110,55 @@ curl.exe "http://localhost:8080/admin/metrics?client=default-client&model=public
 - `average_generation_token_rate` 按 `output_tokens / (结束时间 - 首 token 时间)` 计算，更接近客户端看到的吐字速度。
 - `average_ttft_ms` 是平均首 token 延迟。非流式响应通常无法准确得到该值。
 
+## InfluxDB 指标推送
+
+启用方式和完整配置见[配置说明](configuration.md#influxdb-指标推送)。modelrouter 会为每个完成的代理请求写入一个 `modelrouter_request` 数据点，不会周期性重复推送内存累计值。
+
+内建 tags：
+
+- `client`
+- `model`
+- `route_group`
+- `endpoint`
+- `status_code`
+
+主要 fields：
+
+- `requests`，固定为整数 `1`
+- `duration_ms`、`bytes_out`
+- `prompt_tokens`、`output_tokens`、`total_tokens`
+- `streaming`、`success`
+- `ttft_ms`
+- `end_to_end_token_rate`、`generation_token_rate`
+
+不可计算的 TTFT 或 token 速率字段会省略。错误详情、prompt、messages、响应正文和任何 API token 都不会写入 InfluxDB。
+
+推送使用有界内存队列，不在代理请求路径中等待网络写入。默认攒满 `100` 条或等待 `1` 秒后写入；`408`、`429`、`5xx` 和网络错误最多重试两次，其他 HTTP 错误直接丢弃。队列满、编码失败或最终写入失败都会计入 exporter 状态，但不会改变客户端响应。
+
+`GET /admin/overview` 的 `metrics_exporters.influxdb` 返回：
+
+```json
+{
+  "enabled": true,
+  "pending_points": 0,
+  "written_points": 120,
+  "written_batches": 3,
+  "dropped_points": 0,
+  "encoding_failures": 0,
+  "failed_batches": 0,
+  "retries": 0,
+  "last_success_unix_sec": 1787371200
+}
+```
+
+正常关闭时，modelrouter 会使用独立的 `10` 秒预算刷新剩余数据点。
+
+真实环境验证时，先通过 modelrouter 完成至少一个 Chat Completions 或 Embeddings 请求，然后检查：
+
+- InfluxDB 3：对配置的 database 执行 `SELECT * FROM modelrouter_request ORDER BY time DESC LIMIT 10`。
+- InfluxDB 2：在配置的 bucket 中按 `_measurement == "modelrouter_request"` 查询。
+- `/admin/overview`：确认 `written_points` 增加且 `dropped_points`、`failed_batches` 保持为 `0`。
+
 ## 用量日志
 
 用量日志默认关闭。开启后，每个完成的 Chat Completions 或 Embeddings 请求会写入一条 JSONL 记录：
@@ -163,4 +212,3 @@ curl.exe "http://localhost:8080/admin/usage?client=default-client&limit=100" `
 curl.exe "http://localhost:8080/admin/usage/summary?interval=hour&top=10" `
   -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
-

@@ -16,6 +16,14 @@ import (
 	"modelrouter/internal/router"
 )
 
+type staticExporterStatusProvider struct {
+	status metrics.InfluxDBExporterStatus
+}
+
+func (p staticExporterStatusProvider) Status() metrics.InfluxDBExporterStatus {
+	return p.status
+}
+
 func TestMetricsFiltersAndPaginates(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{
@@ -74,6 +82,38 @@ func TestMetricsFiltersAndPaginates(t *testing.T) {
 	}
 	if len(resp.Items) != 1 || resp.Items[0].Client != "client-a" {
 		t.Fatalf("items = %+v", resp.Items)
+	}
+}
+
+func TestOverviewIncludesMetricsExporterStatus(t *testing.T) {
+	store := router.NewStore(&config.Config{})
+	handler := NewHandler(store, metrics.NewRecorder(), "").WithMetricsExporterStatusProvider(staticExporterStatusProvider{
+		status: metrics.InfluxDBExporterStatus{
+			Enabled:            true,
+			PendingPoints:      2,
+			WrittenPoints:      10,
+			DroppedPoints:      1,
+			LastSuccessUnixSec: 123,
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/admin/overview", nil)
+	rr := httptest.NewRecorder()
+
+	handler.Overview(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	var response struct {
+		MetricsExporters struct {
+			InfluxDB metrics.InfluxDBExporterStatus `json:"influxdb"`
+		} `json:"metrics_exporters"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	status := response.MetricsExporters.InfluxDB
+	if !status.Enabled || status.PendingPoints != 2 || status.WrittenPoints != 10 || status.DroppedPoints != 1 || status.LastSuccessUnixSec != 123 {
+		t.Fatalf("exporter status = %+v", status)
 	}
 }
 

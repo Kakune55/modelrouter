@@ -198,6 +198,58 @@ deepseek-r?
 
 该限制只在当前进程内生效。多实例部署时，每个实例分别维护自己的并发计数。
 
+## InfluxDB 指标推送
+
+InfluxDB 推送默认关闭。`api_version` 表示写入 API 版本，启用时必须明确设置为 `2` 或 `3`。
+写入端点和参数分别遵循 [InfluxDB 3 write_lp API](https://docs.influxdata.com/influxdb3/core/write-data/http-api/v3-write-lp/) 与 [InfluxDB 2 write API](https://docs.influxdata.com/influxdb/v2/api/write-data/)。
+
+InfluxDB 3 使用原生 `/api/v3/write_lp` 端点：
+
+```json
+{
+  "metrics": {
+    "influxdb": {
+      "enabled": true,
+      "api_version": 3,
+      "url": "http://localhost:8181",
+      "database": "modelrouter",
+      "token": "replace-with-influxdb-token"
+    }
+  }
+}
+```
+
+InfluxDB 2 使用 `/api/v2/write` 端点：
+
+```json
+{
+  "metrics": {
+    "influxdb": {
+      "enabled": true,
+      "api_version": 2,
+      "url": "http://localhost:8086",
+      "org": "replace-with-org-name",
+      "bucket": "modelrouter",
+      "token": "replace-with-influxdb-token"
+    }
+  }
+}
+```
+
+- `enabled`：是否启用推送，默认 `false`。
+- `api_version`：写入 API 版本，只接受 `2` 或 `3`；启用时必填。
+- `url`：InfluxDB 基础地址，不要包含写入端点；支持反向代理路径前缀。
+- `org`、`bucket`：InfluxDB 2 必填。
+- `database`：InfluxDB 3 必填。
+- `token`：写入 token，启用时必填；通过 Admin API 读取配置时会被脱敏。
+- `tags`：附加到每个数据点的静态 tag，例如 `instance`、`environment`。内建的 `client`、`model`、`route_group`、`endpoint`、`status_code` 优先。
+- `batch_size`：每批最大数据点数，省略或设为 `0` 时默认 `100`。
+- `flush_interval_seconds`：未达到批量大小时的刷新间隔，省略或设为 `0` 时默认 `1` 秒。
+- `queue_size`：进程内最多待处理数据点数，省略或设为 `0` 时默认 `4096`。
+- `timeout_seconds`：单次 InfluxDB HTTP 写入超时，省略或设为 `0` 时默认 `5` 秒。
+
+普通部署只需要填写连接字段。批量、队列和超时参数可以全部省略。写入行为、数据字段和运行状态见[指标与用量日志](observability.md#influxdb-指标推送)。
+
 ## 其他配置
 
 - `features.auto_include_stream_usage`：当请求为 `stream: true` 时，自动向上游补充 `stream_options.include_usage=true`。
@@ -209,5 +261,5 @@ deepseek-r?
 - 新配置通过完整校验后才会切换。
 - 正在处理的请求继续使用开始时取得的配置快照。
 - `PUT /admin/config` 先写回启动时指定的配置文件，再切换内存配置。
+- InfluxDB 配置更新后，新数据点使用新配置；已经入队的数据点仍写入原目标，不会混批。
 - 代码变更仍需重启服务。
-

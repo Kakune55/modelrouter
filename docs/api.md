@@ -133,7 +133,7 @@ curl.exe http://localhost:8080/admin/config `
   -H "Authorization: Bearer mr-replace-with-admin-token"
 ```
 
-响应中的 Admin token、客户端 key 和上游 `api_key` 会被脱敏。
+响应中的 Admin token、客户端 key、上游 `api_key` 和 InfluxDB token 会被脱敏。
 
 替换完整配置并写回配置文件：
 
@@ -182,7 +182,7 @@ curl.exe -X PUT http://localhost:8080/admin/client-keys/app-a `
 
 ### 状态接口
 
-- `GET /admin/overview`：累计指标、最近窗口和 endpoint 健康状态。
+- `GET /admin/overview`：累计指标、最近窗口、endpoint 健康状态和指标导出器状态。
 - `GET /admin/health`：endpoint 最近状态码、错误、冷却和当前并发状态。
 - `GET /admin/limits`：客户端限流配置、当前并发和当前分钟请求数。
 

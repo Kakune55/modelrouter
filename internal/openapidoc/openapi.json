@@ -893,7 +893,7 @@
           "Admin"
         ],
         "summary": "Get admin overview",
-        "description": "Requires admin:read. Returns summary metrics, recent windows, endpoint health, and client limit status.",
+        "description": "Requires admin:read. Returns summary metrics, recent windows, endpoint health, client limit status, and metrics exporter status.",
         "operationId": "getAdminOverview",
         "security": [
           {
@@ -1863,6 +1863,9 @@
           "usage_log": {
             "$ref": "#/components/schemas/UsageLogConfig"
           },
+          "metrics": {
+            "$ref": "#/components/schemas/MetricsConfig"
+          },
           "auth": {
             "$ref": "#/components/schemas/AuthConfig"
           },
@@ -1986,6 +1989,135 @@
             "default": 720
           }
         }
+      },
+      "MetricsConfig": {
+        "type": "object",
+        "properties": {
+          "influxdb": {
+            "$ref": "#/components/schemas/InfluxDBConfig"
+          }
+        }
+      },
+      "InfluxDBConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable asynchronous InfluxDB metrics export."
+          },
+          "api_version": {
+            "type": "integer",
+            "enum": [
+              2,
+              3
+            ],
+            "description": "InfluxDB write API version. Required when enabled."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "description": "InfluxDB base URL without the write endpoint. Required when enabled."
+          },
+          "org": {
+            "type": "string",
+            "description": "InfluxDB organization. Required for API version 2."
+          },
+          "bucket": {
+            "type": "string",
+            "description": "InfluxDB bucket. Required for API version 2."
+          },
+          "database": {
+            "type": "string",
+            "description": "InfluxDB database. Required for API version 3."
+          },
+          "token": {
+            "type": "string",
+            "description": "InfluxDB write token. Redacted as ******** in GET /admin/config."
+          },
+          "tags": {
+            "type": "object",
+            "propertyNames": {
+              "minLength": 1,
+              "pattern": "^[^\\r\\n]+$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\r\\n]+$"
+            },
+            "description": "Static tags added to every point. Built-in request tags take precedence."
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 100,
+            "description": "Maximum points per batch. A value of 0 uses the default."
+          },
+          "flush_interval_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 1,
+            "description": "Maximum batch wait time in seconds. A value of 0 uses the default."
+          },
+          "queue_size": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 4096,
+            "description": "Maximum pending points. A value of 0 uses the default."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 5,
+            "description": "Timeout for one InfluxDB HTTP write. A value of 0 uses the default."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "enabled": {
+                  "const": true
+                }
+              },
+              "required": [
+                "enabled"
+              ]
+            },
+            "then": {
+              "required": [
+                "api_version",
+                "url",
+                "token"
+              ],
+              "oneOf": [
+                {
+                  "properties": {
+                    "api_version": {
+                      "const": 2
+                    }
+                  },
+                  "required": [
+                    "org",
+                    "bucket"
+                  ]
+                },
+                {
+                  "properties": {
+                    "api_version": {
+                      "const": 3
+                    }
+                  },
+                  "required": [
+                    "database"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
       },
       "AuthConfig": {
         "type": "object",
@@ -2187,6 +2319,68 @@
             "items": {
               "$ref": "#/components/schemas/ClientLimitStatus"
             }
+          },
+          "metrics_exporters": {
+            "type": "object",
+            "properties": {
+              "influxdb": {
+                "$ref": "#/components/schemas/InfluxDBExporterStatus"
+              }
+            }
+          }
+        }
+      },
+      "InfluxDBExporterStatus": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "pending_points": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "written_points": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "written_batches": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "dropped_points": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "encoding_failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed_batches": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "retries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_success_unix_sec": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_error_unix_sec": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_error": {
+            "type": "string"
           }
         }
       },
