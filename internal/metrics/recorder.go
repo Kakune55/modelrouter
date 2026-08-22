@@ -61,17 +61,24 @@ type Counter struct {
 type Event struct {
 	Client             string
 	Model              string
+	UpstreamModel      string
 	RouteGroup         string
 	Endpoint           string
+	APIEndpoint        string
 	StatusCode         int
 	Duration           time.Duration
+	UpstreamDuration   time.Duration
 	BytesOut           int64
 	PromptTokens       int64
 	OutputTokens       int64
 	TotalTokens        int64
+	CacheReadTokens    int64
+	ReasoningTokens    int64
+	RetryCount         int
 	Streaming          bool
 	TTFT               time.Duration
 	GenerationDuration time.Duration
+	CompletedAt        time.Time
 	Err                error
 }
 

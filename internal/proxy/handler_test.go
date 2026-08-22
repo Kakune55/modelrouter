@@ -94,7 +94,8 @@ func TestChatCompletionsProxiesRequest(t *testing.T) {
 	if len(exporter.events) != 1 {
 		t.Fatalf("exported events = %+v", exporter.events)
 	}
-	if event := exporter.events[0]; event.Client != "anonymous" || event.Model != "demo" || event.Endpoint != "upstream" || event.TotalTokens != 7 {
+	if event := exporter.events[0]; event.Client != "anonymous" || event.Model != "demo" || event.UpstreamModel != "demo" ||
+		event.Endpoint != "upstream" || event.APIEndpoint != "/v1/chat/completions" || event.TotalTokens != 7 || event.CompletedAt.IsZero() {
 		t.Fatalf("exported event = %+v", event)
 	}
 }
@@ -537,6 +538,78 @@ func TestChatCompletionsSkipsEndpointAtMaxConcurrency(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsDoesNotInventEndpointWhenAllAreConcurrencyLimited(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "first", BaseURL: "http://127.0.0.1", MaxConcurrency: 1},
+					{Name: "second", BaseURL: "http://127.0.0.1", MaxConcurrency: 1},
+				},
+			},
+		},
+	})
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	for _, endpoint := range []string{"first", "second"} {
+		if !route.TryAcquire(endpoint) {
+			t.Fatalf("failed to pre-acquire endpoint %s", endpoint)
+		}
+		defer route.Release(endpoint)
+	}
+
+	exporter := &recordingEventExporter{}
+	handler := NewHandler(store, metrics.NewRecorder()).WithMetricsExporter(exporter)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	rr := httptest.NewRecorder()
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusTooManyRequests || len(exporter.events) != 1 {
+		t.Fatalf("status = %d events = %+v", rr.Code, exporter.events)
+	}
+	if event := exporter.events[0]; event.Endpoint != "" || event.UpstreamModel != "" || event.RetryCount != 0 {
+		t.Fatalf("limited event = %+v", event)
+	}
+}
+
+func TestChatCompletionsAttributesTransportFailureToLastAttempt(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	firstURL := first.URL
+	first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	secondURL := second.URL
+	second.Close()
+
+	store := router.NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "first", BaseURL: firstURL},
+					{Name: "second", BaseURL: secondURL},
+				},
+			},
+		},
+	})
+	exporter := &recordingEventExporter{}
+	handler := NewHandler(store, metrics.NewRecorder()).WithMetricsExporter(exporter)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	rr := httptest.NewRecorder()
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusBadGateway || len(exporter.events) != 1 {
+		t.Fatalf("status = %d events = %+v", rr.Code, exporter.events)
+	}
+	if event := exporter.events[0]; event.Endpoint != "second" || event.RetryCount != 1 {
+		t.Fatalf("transport failure event = %+v", event)
+	}
+}
+
 func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 	firstCalled := false
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -568,7 +641,8 @@ func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(store, metrics.NewRecorder())
+	exporter := &recordingEventExporter{}
+	handler := NewHandler(store, metrics.NewRecorder()).WithMetricsExporter(exporter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
 	rr := httptest.NewRecorder()
@@ -583,6 +657,13 @@ func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "upstream failed") {
 		t.Fatalf("response should come from fallback endpoint: %s", rr.Body.String())
+	}
+	if len(exporter.events) != 1 {
+		t.Fatalf("exported events = %+v", exporter.events)
+	}
+	event := exporter.events[0]
+	if event.Endpoint != "second" || event.RetryCount != 1 || event.UpstreamDuration <= 0 {
+		t.Fatalf("fallback metrics = %+v", event)
 	}
 }
 
@@ -754,7 +835,7 @@ func TestForwardIdleTimeoutResetsWhenStreamingDataArrives(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo"}`))
 	rr := httptest.NewRecorder()
 
-	resp, err := handler.forward(rr, req, []byte(`{"model":"demo"}`), 100*time.Millisecond, 0, 64<<20, config.EndpointConfig{BaseURL: upstream.URL}, "/chat/completions")
+	resp, err := handler.forward(rr, req, []byte(`{"model":"demo"}`), 100*time.Millisecond, 0, 64<<20, config.EndpointConfig{BaseURL: upstream.URL}, "/chat/completions", time.Now())
 	if err != nil {
 		t.Fatalf("forward() error = %v", err)
 	}
@@ -782,7 +863,7 @@ func TestForwardIdleTimeoutWhileWaitingForUpstream(t *testing.T) {
 	rr := httptest.NewRecorder()
 	started := time.Now()
 
-	_, err := handler.forward(rr, req, []byte(`{"model":"demo"}`), 50*time.Millisecond, 0, 64<<20, config.EndpointConfig{BaseURL: upstream.URL}, "/chat/completions")
+	_, err := handler.forward(rr, req, []byte(`{"model":"demo"}`), 50*time.Millisecond, 0, 64<<20, config.EndpointConfig{BaseURL: upstream.URL}, "/chat/completions", time.Now())
 	if !errors.Is(err, errUpstreamIdleTimeout) {
 		t.Fatalf("forward() error = %v, want %v", err, errUpstreamIdleTimeout)
 	}

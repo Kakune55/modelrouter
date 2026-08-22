@@ -72,6 +72,7 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPath string, useFeatures bool) {
+	requestStarted := time.Now()
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "method_not_allowed")
 		return
@@ -116,30 +117,37 @@ func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPa
 		return
 	}
 
-	start := time.Now()
 	features := config.FeaturesConfig{}
 	if useFeatures {
 		features = snap.Config.Features
 	}
-	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.IdleTimeout(), snap.Config.TotalTimeout(), snap.Config.MaxResponseBodyBytes(), features, route, upstreamPath)
-	duration := time.Since(start)
-	if endpoint.Name == "" {
-		endpoint = route.Endpoint
+	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.IdleTimeout(), snap.Config.TotalTimeout(), snap.Config.MaxResponseBodyBytes(), features, route, upstreamPath, requestStarted)
+	completedAt := time.Now()
+	upstreamModelName := ""
+	if endpoint.Name != "" {
+		upstreamModelName = upstreamModel(route, endpoint)
 	}
 	event := metrics.Event{
 		Client:             client.Name,
 		Model:              modelName,
+		UpstreamModel:      upstreamModelName,
 		RouteGroup:         route.Group,
 		Endpoint:           endpoint.Name,
+		APIEndpoint:        r.URL.Path,
 		StatusCode:         status,
-		Duration:           duration,
+		Duration:           completedAt.Sub(requestStarted),
+		UpstreamDuration:   responseStats.UpstreamDuration,
 		BytesOut:           bytesOut,
 		PromptTokens:       usage.PromptTokens,
 		OutputTokens:       usage.CompletionTokens,
 		TotalTokens:        usage.TotalTokens,
+		CacheReadTokens:    usage.PromptTokensDetails.CachedTokens,
+		ReasoningTokens:    usage.CompletionTokensDetails.ReasoningTokens,
+		RetryCount:         max(responseStats.Attempts-1, 0),
 		Streaming:          responseStats.Streaming,
 		TTFT:               responseStats.TTFT,
 		GenerationDuration: responseStats.GenerationDuration,
+		CompletedAt:        completedAt,
 		Err:                err,
 	}
 	h.recorder.Record(event)
@@ -164,6 +172,8 @@ type responseStats struct {
 	Streaming          bool
 	TTFT               time.Duration
 	GenerationDuration time.Duration
+	UpstreamDuration   time.Duration
+	Attempts           int
 	ResponseStarted    bool
 }
 
@@ -176,11 +186,14 @@ type upstreamResponse struct {
 	Stats      responseStats
 }
 
-func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, features config.FeaturesConfig, route *router.Route, upstreamPath string) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
+func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, features config.FeaturesConfig, route *router.Route, upstreamPath string, requestStarted time.Time) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
 	endpoints := route.Candidates()
 	var lastErr error
 	var lastResponse *upstreamResponse
-	var lastEndpoint config.EndpointConfig
+	var lastAttemptedEndpoint config.EndpointConfig
+	var lastResponseEndpoint config.EndpointConfig
+	var upstreamDuration time.Duration
+	attempts := 0
 	limited := false
 	for _, endpoint := range endpoints {
 		if !route.TryAcquire(endpoint.Name) {
@@ -192,7 +205,11 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			route.Release(endpoint.Name)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
 		}
-		resp, err := h.forward(w, r, upstreamBody, idleTimeout, totalTimeout, maxResponseBodyBytes, endpoint, upstreamPath)
+		lastAttemptedEndpoint = endpoint
+		attemptStarted := time.Now()
+		attempts++
+		resp, err := h.forward(w, r, upstreamBody, idleTimeout, totalTimeout, maxResponseBodyBytes, endpoint, upstreamPath, requestStarted)
+		upstreamDuration += time.Since(attemptStarted)
 		route.Release(endpoint.Name)
 		if err != nil {
 			statusCode := 0
@@ -201,6 +218,8 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			}
 			route.MarkFailure(endpoint.Name, statusCode, err)
 			if resp != nil && resp.Stats.ResponseStarted {
+				resp.Stats.UpstreamDuration = upstreamDuration
+				resp.Stats.Attempts = attempts
 				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, err
 			}
 			lastErr = err
@@ -209,10 +228,12 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 		if endpointFailureStatus(resp.StatusCode) {
 			route.MarkFailure(endpoint.Name, resp.StatusCode, nil)
 			if resp.Stats.ResponseStarted {
+				resp.Stats.UpstreamDuration = upstreamDuration
+				resp.Stats.Attempts = attempts
 				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, nil
 			}
 			lastResponse = resp
-			lastEndpoint = endpoint
+			lastResponseEndpoint = endpoint
 			continue
 		} else {
 			route.MarkSuccess(endpoint.Name, resp.StatusCode)
@@ -221,15 +242,21 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 			bytesOut, err := writeBufferedResponse(w, resp)
 			resp.BytesOut = bytesOut
 			if err != nil {
+				resp.Stats.UpstreamDuration = upstreamDuration
+				resp.Stats.Attempts = attempts
 				return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, err
 			}
 		}
+		resp.Stats.UpstreamDuration = upstreamDuration
+		resp.Stats.Attempts = attempts
 		return resp.StatusCode, resp.Usage, resp.BytesOut, endpoint, resp.Stats, nil
 	}
 	if lastResponse != nil {
 		bytesOut, err := writeBufferedResponse(w, lastResponse)
 		lastResponse.BytesOut = bytesOut
-		return lastResponse.StatusCode, lastResponse.Usage, lastResponse.BytesOut, lastEndpoint, lastResponse.Stats, err
+		lastResponse.Stats.UpstreamDuration = upstreamDuration
+		lastResponse.Stats.Attempts = attempts
+		return lastResponse.StatusCode, lastResponse.Usage, lastResponse.BytesOut, lastResponseEndpoint, lastResponse.Stats, err
 	}
 	if lastErr == nil {
 		if limited {
@@ -237,7 +264,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 		}
 		lastErr = errors.New("no upstream endpoint available")
 	}
-	return http.StatusBadGateway, usageInfo{}, 0, config.EndpointConfig{}, responseStats{}, lastErr
+	return http.StatusBadGateway, usageInfo{}, 0, lastAttemptedEndpoint, responseStats{UpstreamDuration: upstreamDuration, Attempts: attempts}, lastErr
 }
 
 func endpointFailureStatus(status int) bool {
@@ -263,8 +290,7 @@ func applyEndpointHeaders(header http.Header, values map[string]string) {
 	}
 }
 
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, endpoint config.EndpointConfig, upstreamPath string) (*upstreamResponse, error) {
-	started := time.Now()
+func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, endpoint config.EndpointConfig, upstreamPath string, requestStarted time.Time) (*upstreamResponse, error) {
 	ctx := r.Context()
 	if totalTimeout > 0 {
 		var cancel context.CancelFunc
@@ -299,7 +325,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, body []byte, i
 	if isStreamResponse(resp.Header) {
 		copyResponseHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
-		n, stats, err := copyStreaming(w, resp.Body, started)
+		n, stats, err := copyStreaming(w, resp.Body, requestStarted)
 		err = idle.NormalizeError(err)
 		return &upstreamResponse{
 			StatusCode: resp.StatusCode,
