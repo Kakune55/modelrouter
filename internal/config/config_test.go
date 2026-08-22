@@ -321,6 +321,8 @@ func TestValidateRejectsInvalidInfluxDBTuningAndTags(t *testing.T) {
 		{TimeoutSeconds: -1},
 		{Tags: map[string]string{"": "value"}},
 		{Tags: map[string]string{"environment": ""}},
+		{Tags: map[string]string{"bad\nkey": "value"}},
+		{Tags: map[string]string{"environment": "bad\rvalue"}},
 	} {
 		cfg := validConfigWithInfluxDB(influx)
 		if err := cfg.Validate(); err == nil {

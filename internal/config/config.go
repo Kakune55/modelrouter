@@ -335,6 +335,9 @@ func (c *Config) validateInfluxDB() error {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("metrics.influxdb.tags[%q] must not be empty", key)
 		}
+		if strings.ContainsAny(key, "\r\n") || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("metrics.influxdb.tags[%q] must not contain newlines", key)
+		}
 	}
 	if !influx.Enabled {
 		return nil
