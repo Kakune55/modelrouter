@@ -587,6 +587,10 @@ func redactedConfig(cfg *config.Config) *config.Config {
 		return nil
 	}
 	clone := *cfg
+	if clone.Metrics.InfluxDB.Token != "" {
+		clone.Metrics.InfluxDB.Token = "********"
+	}
+	clone.Metrics.InfluxDB.Tags = cloneStringMap(cfg.Metrics.InfluxDB.Tags)
 	if clone.Admin.Token != "" {
 		clone.Admin.Token = "********"
 	}
@@ -896,6 +900,7 @@ func cloneConfig(cfg *config.Config) *config.Config {
 		return &config.Config{}
 	}
 	clone := *cfg
+	clone.Metrics.InfluxDB.Tags = cloneStringMap(cfg.Metrics.InfluxDB.Tags)
 	clone.Admin.Keys = append([]config.AdminKeyConfig(nil), cfg.Admin.Keys...)
 	for i := range clone.Admin.Keys {
 		clone.Admin.Keys[i].Permissions = append([]string(nil), cfg.Admin.Keys[i].Permissions...)
@@ -926,6 +931,17 @@ func cloneConfig(cfg *config.Config) *config.Config {
 		clone.RouteGroups[key] = value
 	}
 	return &clone
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func decodeAdminJSON(w http.ResponseWriter, r *http.Request, out any) bool {

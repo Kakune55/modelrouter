@@ -334,6 +334,12 @@ func TestAdminConfigRedactsSecrets(t *testing.T) {
 				{Name: "client", Key: "client-token", AccessGroup: "default"},
 			},
 		},
+		Metrics: config.MetricsConfig{
+			InfluxDB: config.InfluxDBConfig{
+				Enabled: true, APIVersion: 3, URL: "http://localhost:8181",
+				Database: "modelrouter", Token: "influxdb-token",
+			},
+		},
 		AccessGroups: map[string]config.AccessGroupConfig{
 			"default": {},
 		},
@@ -360,7 +366,7 @@ func TestAdminConfigRedactsSecrets(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rr.Code, body)
 	}
-	for _, secret := range []string{"admin-token", "dashboard-token", "client-token", "upstream-token"} {
+	for _, secret := range []string{"admin-token", "dashboard-token", "client-token", "upstream-token", "influxdb-token"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("response leaked secret %q: %s", secret, body)
 		}
