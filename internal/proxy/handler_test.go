@@ -548,6 +548,160 @@ func TestChatCompletionsSkipsEndpointAtMaxConcurrency(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsSkipsEndpointAtClientConcurrencyLimit(t *testing.T) {
+	firstCalled := false
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalled = true
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer first.Close()
+
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer second.Close()
+
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "secret", AccessGroup: "group-a"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {
+				RateLimit: config.RateLimitConfig{MaxConcurrencyPerEndpoint: 1},
+			},
+		},
+		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "first", BaseURL: first.URL},
+					{Name: "second", BaseURL: second.URL},
+				},
+			},
+		},
+	})
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if !route.TryAcquireForClient("first", "client-a", 1) {
+		t.Fatal("failed to pre-acquire first endpoint")
+	}
+	defer route.ReleaseForClient("first", "client-a", 1)
+
+	handler := NewHandler(store, metrics.NewRecorder())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rr := httptest.NewRecorder()
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rr.Code, rr.Body.String())
+	}
+	if firstCalled {
+		t.Fatal("first endpoint should have been skipped")
+	}
+}
+
+func TestChatCompletionsReturnsRateLimitWhenAllClientEndpointQuotasAreFull(t *testing.T) {
+	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "secret", AccessGroup: "group-a"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {
+				RateLimit: config.RateLimitConfig{MaxConcurrencyPerEndpoint: 1},
+			},
+		},
+		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "first", BaseURL: "http://127.0.0.1"},
+					{Name: "second", BaseURL: "http://127.0.0.1"},
+				},
+			},
+		},
+	})
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	for _, endpoint := range []string{"first", "second"} {
+		if !route.TryAcquireForClient(endpoint, "client-a", 1) {
+			t.Fatalf("failed to pre-acquire endpoint %s", endpoint)
+		}
+		defer route.ReleaseForClient(endpoint, "client-a", 1)
+	}
+
+	exporter := &recordingEventExporter{}
+	handler := NewHandler(store, metrics.NewRecorder()).WithMetricsExporter(exporter)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rr := httptest.NewRecorder()
+	handler.ChatCompletions(rr, req)
+
+	if rr.Code != http.StatusTooManyRequests || len(exporter.events) != 1 {
+		t.Fatalf("status = %d events = %+v", rr.Code, exporter.events)
+	}
+	if event := exporter.events[0]; event.Endpoint != "" || event.UpstreamModel != "" || event.RetryCount != 0 {
+		t.Fatalf("limited event = %+v", event)
+	}
+}
+
+func TestClientLimitStatusIncludesEndpointInflight(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "secret", AccessGroup: "group-a"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {
+				RateLimit: config.RateLimitConfig{MaxConcurrencyPerEndpoint: 4},
+			},
+		},
+		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy:  config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{{Name: "first", BaseURL: "http://first"}},
+			},
+		},
+	}
+	store := router.NewStore(cfg)
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if !route.TryAcquireForClient("first", "client-a", 4) {
+		t.Fatal("failed to acquire endpoint")
+	}
+	defer route.ReleaseForClient("first", "client-a", 4)
+
+	items, ok := NewHandler(store, metrics.NewRecorder()).ClientLimitStatus().([]clientLimitStatus)
+	if !ok || len(items) != 1 {
+		t.Fatalf("limit status = %+v", items)
+	}
+	if items[0].MaxConcurrencyPerEndpoint != 4 || len(items[0].EndpointInflight) != 1 {
+		t.Fatalf("limit status = %+v", items[0])
+	}
+	endpoint := items[0].EndpointInflight[0]
+	if endpoint.RouteGroup != "group" || endpoint.Endpoint != "first" || endpoint.Inflight != 1 {
+		t.Fatalf("endpoint inflight = %+v", endpoint)
+	}
+}
+
 func TestChatCompletionsDoesNotInventEndpointWhenAllAreConcurrencyLimited(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
@@ -638,6 +792,17 @@ func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 	defer second.Close()
 
 	store := router.NewStore(&config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "secret", AccessGroup: "group-a"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {
+				RateLimit: config.RateLimitConfig{MaxConcurrencyPerEndpoint: 1},
+			},
+		},
 		Models: map[string]config.ModelConfig{
 			"demo": {RouteGroup: "group"},
 		},
@@ -655,6 +820,7 @@ func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 	handler := NewHandler(store, metrics.NewRecorder()).WithMetricsExporter(exporter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer secret")
 	rr := httptest.NewRecorder()
 
 	handler.ChatCompletions(rr, req)
@@ -674,6 +840,16 @@ func TestChatCompletionsFallsBackOnBufferedUpstreamFailure(t *testing.T) {
 	event := exporter.events[0]
 	if event.Endpoint != "second" || event.RetryCount != 1 || event.UpstreamDuration <= 0 {
 		t.Fatalf("fallback metrics = %+v", event)
+	}
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	for _, endpoint := range []string{"first", "second"} {
+		if !route.TryAcquireForClient(endpoint, "client-a", 1) {
+			t.Fatalf("endpoint %s quota was not released", endpoint)
+		}
+		route.ReleaseForClient(endpoint, "client-a", 1)
 	}
 }
 

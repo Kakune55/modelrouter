@@ -40,3 +40,22 @@ func TestClientLimiterRequestsPerMinute(t *testing.T) {
 		t.Fatalf("request after window reset rejected: %s", decision.Reason)
 	}
 }
+
+func TestClientLimitStatusIncludesEndpointConcurrencyLimit(t *testing.T) {
+	limiter := newClientLimiter()
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Keys: []config.ClientKeyConfig{{Name: "client", AccessGroup: "group"}},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group": {
+				RateLimit: config.RateLimitConfig{MaxConcurrencyPerEndpoint: 4},
+			},
+		},
+	}
+
+	items := limiter.status(cfg, time.Now())
+	if len(items) != 1 || items[0].MaxConcurrencyPerEndpoint != 4 {
+		t.Fatalf("limit status = %+v", items)
+	}
+}

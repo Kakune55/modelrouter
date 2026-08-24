@@ -184,7 +184,7 @@ curl.exe -X PUT http://localhost:8080/admin/client-keys/app-a `
 
 - `GET /admin/overview`：累计指标、最近窗口、endpoint 健康状态和指标导出器状态。
 - `GET /admin/health`：endpoint 最近状态码、错误、冷却和当前并发状态。
-- `GET /admin/limits`：客户端限流配置、当前并发和当前分钟请求数。
+- `GET /admin/limits`：客户端限流配置、当前总并发、各 endpoint 当前并发和当前分钟请求数。
 
 例如：
 

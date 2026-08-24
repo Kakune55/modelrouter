@@ -106,8 +106,9 @@ type AccessGroupConfig struct {
 }
 
 type RateLimitConfig struct {
-	MaxConcurrency    int `json:"max_concurrency,omitempty"`
-	RequestsPerMinute int `json:"requests_per_minute,omitempty"`
+	MaxConcurrency            int `json:"max_concurrency,omitempty"`
+	MaxConcurrencyPerEndpoint int `json:"max_concurrency_per_endpoint,omitempty"`
+	RequestsPerMinute         int `json:"requests_per_minute,omitempty"`
 }
 
 type ModelConfig struct {
@@ -453,6 +454,9 @@ func (c *Config) validateAuth() error {
 		}
 		if access.RateLimit.MaxConcurrency < 0 {
 			return fmt.Errorf("access group %q rate_limit.max_concurrency must not be negative", name)
+		}
+		if access.RateLimit.MaxConcurrencyPerEndpoint < 0 {
+			return fmt.Errorf("access group %q rate_limit.max_concurrency_per_endpoint must not be negative", name)
 		}
 		if access.RateLimit.RequestsPerMinute < 0 {
 			return fmt.Errorf("access group %q rate_limit.requests_per_minute must not be negative", name)
