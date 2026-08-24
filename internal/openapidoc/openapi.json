@@ -2179,6 +2179,10 @@
             "type": "integer",
             "minimum": 0
           },
+          "max_concurrency_per_endpoint": {
+            "type": "integer",
+            "minimum": 0
+          },
           "requests_per_minute": {
             "type": "integer",
             "minimum": 0
@@ -2938,8 +2942,17 @@
           "max_concurrency": {
             "type": "integer"
           },
+          "max_concurrency_per_endpoint": {
+            "type": "integer"
+          },
           "inflight": {
             "type": "integer"
+          },
+          "endpoint_inflight": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientEndpointInflight"
+            }
           },
           "requests_per_minute": {
             "type": "integer"
@@ -2950,6 +2963,20 @@
           "window_reset_unix_sec": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "ClientEndpointInflight": {
+        "type": "object",
+        "properties": {
+          "route_group": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "inflight": {
+            "type": "integer"
           }
         }
       }

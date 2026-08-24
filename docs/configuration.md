@@ -158,6 +158,7 @@ Authorization: Bearer <token>
       "blocked_models": ["*-disabled"],
       "rate_limit": {
         "max_concurrency": 8,
+        "max_concurrency_per_endpoint": 4,
         "requests_per_minute": 120
       }
     }
@@ -171,6 +172,7 @@ Authorization: Bearer <token>
 - `allowed_models`：允许访问的模型模式。为空或不配置时默认允许全部模型。
 - `blocked_models`：禁止访问的模型模式，优先级高于 `allowed_models`。
 - `max_concurrency`：使用该访问组的每个客户端最大并发数，小于等于 `0` 表示不限制。
+- `max_concurrency_per_endpoint`：每个客户端在单个 endpoint 上的最大并发数，小于等于 `0` 表示不限制。
 - `requests_per_minute`：使用该访问组的每个客户端每分钟最大请求数，小于等于 `0` 表示不限制。
 
 模型模式支持精确匹配、`*`、前后缀、包含匹配和 `?` 单字符匹配，例如：
@@ -194,7 +196,9 @@ deepseek-r?
 
 ## Endpoint 并发限制
 
-请求转发前会先占用 endpoint 的并发名额。当前 endpoint 已满时，会尝试同一 route group 的下一个候选；全部候选都已满时返回 `429 rate_limit_exceeded`。
+请求转发前会同时检查 endpoint 全局并发和当前客户端在该 endpoint 上的并发。任一限制已满时，会尝试同一 route group 的下一个候选；全部候选都已满时返回 `429 rate_limit_exceeded`。
+
+`endpoints[].max_concurrency` 控制 endpoint 全局并发，`access_groups.*.rate_limit.max_concurrency_per_endpoint` 控制每个客户端在单个 endpoint 上的并发。两者互不替代，可以同时启用。配合 `first_available` 时，主 endpoint 达到当前客户端的限制后，新请求会回退到后续 endpoint。
 
 该限制只在当前进程内生效。多实例部署时，每个实例分别维护自己的并发计数。
 

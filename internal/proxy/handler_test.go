@@ -658,6 +658,50 @@ func TestChatCompletionsReturnsRateLimitWhenAllClientEndpointQuotasAreFull(t *te
 	}
 }
 
+func TestClientLimitStatusIncludesEndpointInflight(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "secret", AccessGroup: "group-a"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{
+			"group-a": {
+				RateLimit: config.RateLimitConfig{MaxConcurrencyPerEndpoint: 4},
+			},
+		},
+		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy:  config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{{Name: "first", BaseURL: "http://first"}},
+			},
+		},
+	}
+	store := router.NewStore(cfg)
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if !route.TryAcquireForClient("first", "client-a", 4) {
+		t.Fatal("failed to acquire endpoint")
+	}
+	defer route.ReleaseForClient("first", "client-a", 4)
+
+	items, ok := NewHandler(store, metrics.NewRecorder()).ClientLimitStatus().([]clientLimitStatus)
+	if !ok || len(items) != 1 {
+		t.Fatalf("limit status = %+v", items)
+	}
+	if items[0].MaxConcurrencyPerEndpoint != 4 || len(items[0].EndpointInflight) != 1 {
+		t.Fatalf("limit status = %+v", items[0])
+	}
+	endpoint := items[0].EndpointInflight[0]
+	if endpoint.RouteGroup != "group" || endpoint.Endpoint != "first" || endpoint.Inflight != 1 {
+		t.Fatalf("endpoint inflight = %+v", endpoint)
+	}
+}
+
 func TestChatCompletionsDoesNotInventEndpointWhenAllAreConcurrencyLimited(t *testing.T) {
 	store := router.NewStore(&config.Config{
 		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},

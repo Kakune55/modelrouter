@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -162,7 +163,6 @@ func (r *Route) TryAcquire(endpointName string) bool {
 
 func (r *Route) Release(endpointName string) {
 	r.group.release(endpointName, "", 0)
-
 }
 
 func (r *Route) TryAcquireForClient(endpointName, clientName string, limit int) bool {
@@ -305,6 +305,39 @@ type EndpointHealth struct {
 	LastSuccessUnix     int64  `json:"last_success_unix_sec,omitempty"`
 	MaxConcurrency      int    `json:"max_concurrency,omitempty"`
 	Inflight            int    `json:"inflight"`
+}
+
+type ClientEndpointInflight struct {
+	RouteGroup string `json:"route_group"`
+	Endpoint   string `json:"endpoint"`
+	Inflight   int    `json:"inflight"`
+}
+
+func (s *Snapshot) ClientEndpointInflight(clientName string) []ClientEndpointInflight {
+	items := make([]ClientEndpointInflight, 0)
+	for _, group := range s.groups {
+		for i, endpoint := range group.endpoints {
+			state := &group.endpointState[i]
+			state.mu.RLock()
+			inflight := state.inflightByClient[clientName]
+			state.mu.RUnlock()
+			if inflight <= 0 {
+				continue
+			}
+			items = append(items, ClientEndpointInflight{
+				RouteGroup: group.Name,
+				Endpoint:   endpoint.Name,
+				Inflight:   inflight,
+			})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].RouteGroup == items[j].RouteGroup {
+			return items[i].Endpoint < items[j].Endpoint
+		}
+		return items[i].RouteGroup < items[j].RouteGroup
+	})
+	return items
 }
 
 func (s *Snapshot) Health() []EndpointHealth {

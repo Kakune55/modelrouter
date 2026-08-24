@@ -377,3 +377,40 @@ func TestEndpointMaxConcurrencyPerClientWithoutGlobalLimit(t *testing.T) {
 	route.ReleaseForClient("a", "client-a", 1)
 	route.ReleaseForClient("a", "client-b", 1)
 }
+
+func TestClientEndpointInflight(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo-a": {RouteGroup: "group-a"},
+			"demo-b": {RouteGroup: "group-b"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group-b": {
+				Strategy:  config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{{Name: "second", BaseURL: "http://b"}},
+			},
+			"group-a": {
+				Strategy:  config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{{Name: "first", BaseURL: "http://a"}},
+			},
+		},
+	})
+
+	for _, model := range []string{"demo-b", "demo-a"} {
+		route, err := store.Get().Pick(model, "127.0.0.1")
+		if err != nil {
+			t.Fatalf("Pick(%q) error = %v", model, err)
+		}
+		if !route.TryAcquireForClient(route.Endpoint.Name, "client-a", 2) {
+			t.Fatalf("acquire %q failed", route.Endpoint.Name)
+		}
+	}
+
+	items := store.Get().ClientEndpointInflight("client-a")
+	if len(items) != 2 || items[0].RouteGroup != "group-a" || items[0].Endpoint != "first" || items[1].RouteGroup != "group-b" || items[1].Endpoint != "second" {
+		t.Fatalf("client endpoint inflight = %+v", items)
+	}
+	if other := store.Get().ClientEndpointInflight("client-b"); len(other) != 0 {
+		t.Fatalf("unexpected client-b inflight = %+v", other)
+	}
+}

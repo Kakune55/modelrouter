@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"modelrouter/internal/config"
+	"modelrouter/internal/router"
 )
 
 type clientLimiter struct {
@@ -19,13 +20,15 @@ type clientLimitState struct {
 }
 
 type clientLimitStatus struct {
-	Client             string `json:"client"`
-	AccessGroup        string `json:"access_group"`
-	MaxConcurrency     int    `json:"max_concurrency"`
-	Inflight           int    `json:"inflight"`
-	RequestsPerMinute  int    `json:"requests_per_minute"`
-	WindowRequests     int    `json:"window_requests"`
-	WindowResetUnixSec int64  `json:"window_reset_unix_sec,omitempty"`
+	Client                    string                          `json:"client"`
+	AccessGroup               string                          `json:"access_group"`
+	MaxConcurrency            int                             `json:"max_concurrency"`
+	MaxConcurrencyPerEndpoint int                             `json:"max_concurrency_per_endpoint"`
+	Inflight                  int                             `json:"inflight"`
+	EndpointInflight          []router.ClientEndpointInflight `json:"endpoint_inflight,omitempty"`
+	RequestsPerMinute         int                             `json:"requests_per_minute"`
+	WindowRequests            int                             `json:"window_requests"`
+	WindowResetUnixSec        int64                           `json:"window_reset_unix_sec,omitempty"`
 }
 
 type clientLimitDecision struct {
@@ -87,10 +90,11 @@ func (l *clientLimiter) status(cfg *config.Config, now time.Time) []clientLimitS
 		access := cfg.AccessGroups[key.AccessGroup]
 		state := l.clients[key.Name]
 		item := clientLimitStatus{
-			Client:            key.Name,
-			AccessGroup:       key.AccessGroup,
-			MaxConcurrency:    access.RateLimit.MaxConcurrency,
-			RequestsPerMinute: access.RateLimit.RequestsPerMinute,
+			Client:                    key.Name,
+			AccessGroup:               key.AccessGroup,
+			MaxConcurrency:            access.RateLimit.MaxConcurrency,
+			MaxConcurrencyPerEndpoint: access.RateLimit.MaxConcurrencyPerEndpoint,
+			RequestsPerMinute:         access.RateLimit.RequestsPerMinute,
 		}
 		if state != nil {
 			if now.Sub(state.windowStart) >= time.Minute {

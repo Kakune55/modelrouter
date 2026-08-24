@@ -6,7 +6,7 @@ modelrouter 在内存中记录请求数、延迟、token、流式响应和 endpo
 
 - `/admin/overview`：累计 summary、最近窗口、endpoint 健康状态和指标导出器状态。
 - `/admin/health`：endpoint 健康、冷却和当前并发状态。
-- `/admin/limits`：客户端限流配置和当前状态。
+- `/admin/limits`：客户端限流配置、当前总并发和各 endpoint 当前并发状态。
 - `/admin/metrics`：按 client、model、route group 和 endpoint 组合的累计指标。
 - `/admin/metrics/summary`：全局 summary 和最近窗口。
 - `/admin/metrics/clients`：按 client 聚合。

@@ -61,6 +61,7 @@
       ],
       "rate_limit": {
         "max_concurrency": 8,
+        "max_concurrency_per_endpoint": 4,
         "requests_per_minute": 120
       }
     }
@@ -97,14 +98,14 @@
               "enable_thinking": false
             }
           },
-          "max_concurrency": 8
+          "max_concurrency": 16
         },
         {
           "name": "backup-upstream",
           "model": "provider-b/model-id",
           "base_url": "http://backup-upstream.example.com/v1",
           "api_key": "replace-with-backup-api-key",
-          "max_concurrency": 4
+          "max_concurrency": 16
         }
       ]
     }

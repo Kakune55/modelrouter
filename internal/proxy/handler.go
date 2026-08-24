@@ -60,7 +60,12 @@ func (h *Handler) Close() {
 }
 
 func (h *Handler) ClientLimitStatus() any {
-	return h.clientLimiter.status(h.store.Get().Config, time.Now())
+	snap := h.store.Get()
+	items := h.clientLimiter.status(snap.Config, time.Now())
+	for i := range items {
+		items[i].EndpointInflight = snap.ClientEndpointInflight(items[i].Client)
+	}
+	return items
 }
 
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
