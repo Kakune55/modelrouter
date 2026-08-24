@@ -509,33 +509,46 @@ func TestValidateRejectsEmptyAccessPattern(t *testing.T) {
 }
 
 func TestValidateRejectsNegativeRateLimit(t *testing.T) {
-	cfg := &Config{
-		Auth: AuthConfig{
-			Enabled: true,
-			Keys: []ClientKeyConfig{
-				{Name: "client", Key: "secret", AccessGroup: "group-a"},
-			},
-		},
-		AccessGroups: map[string]AccessGroupConfig{
-			"group-a": {
-				RateLimit: RateLimitConfig{MaxConcurrency: -1},
-			},
-		},
-		Models: map[string]ModelConfig{
-			"demo": {RouteGroup: "group"},
-		},
-		RouteGroups: map[string]RouteGroupConfig{
-			"group": {
-				Strategy: StrategyRoundRobin,
-				Endpoints: []EndpointConfig{
-					{Name: "ep", BaseURL: "http://localhost:8081"},
-				},
-			},
-		},
+	tests := []struct {
+		name      string
+		rateLimit RateLimitConfig
+	}{
+		{name: "max concurrency", rateLimit: RateLimitConfig{MaxConcurrency: -1}},
+		{name: "max concurrency per endpoint", rateLimit: RateLimitConfig{MaxConcurrencyPerEndpoint: -1}},
+		{name: "requests per minute", rateLimit: RateLimitConfig{RequestsPerMinute: -1}},
 	}
 
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected validation error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Auth: AuthConfig{
+					Enabled: true,
+					Keys: []ClientKeyConfig{
+						{Name: "client", Key: "secret", AccessGroup: "group-a"},
+					},
+				},
+				AccessGroups: map[string]AccessGroupConfig{
+					"group-a": {
+						RateLimit: tt.rateLimit,
+					},
+				},
+				Models: map[string]ModelConfig{
+					"demo": {RouteGroup: "group"},
+				},
+				RouteGroups: map[string]RouteGroupConfig{
+					"group": {
+						Strategy: StrategyRoundRobin,
+						Endpoints: []EndpointConfig{
+							{Name: "ep", BaseURL: "http://localhost:8081"},
+						},
+					},
+				},
+			}
+
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }
 
