@@ -146,7 +146,7 @@ func (h *Handler) proxyOpenAI(w http.ResponseWriter, r *http.Request, upstreamPa
 	if useFeatures {
 		features = snap.Config.Features
 	}
-	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.IdleTimeout(), snap.Config.TotalTimeout(), snap.Config.MaxResponseBodyBytes(), features, route, upstreamPath, requestStarted)
+	status, usage, bytesOut, endpoint, responseStats, err := h.forwardWithFallback(w, r, body, snap.Config.IdleTimeout(), snap.Config.TotalTimeout(), snap.Config.MaxResponseBodyBytes(), features, route, client.Name, limit.MaxConcurrencyPerEndpoint, upstreamPath, requestStarted)
 	upstreamModelName := ""
 	if endpoint.Name != "" {
 		upstreamModelName = upstreamModel(route, endpoint)
@@ -197,7 +197,7 @@ type upstreamResponse struct {
 	Stats      responseStats
 }
 
-func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, features config.FeaturesConfig, route *router.Route, upstreamPath string, requestStarted time.Time) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
+func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, body []byte, idleTimeout, totalTimeout time.Duration, maxResponseBodyBytes int64, features config.FeaturesConfig, route *router.Route, clientName string, maxConcurrencyPerEndpoint int, upstreamPath string, requestStarted time.Time) (int, usageInfo, int64, config.EndpointConfig, responseStats, error) {
 	endpoints := route.Candidates()
 	var lastErr error
 	var lastResponse *upstreamResponse
@@ -207,13 +207,13 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 	attempts := 0
 	limited := false
 	for _, endpoint := range endpoints {
-		if !route.TryAcquire(endpoint.Name) {
+		if !route.TryAcquireForClient(endpoint.Name, clientName, maxConcurrencyPerEndpoint) {
 			limited = true
 			continue
 		}
 		upstreamBody, err := prepareUpstreamBody(body, upstreamModel(route, endpoint), endpoint.RequestDefaults, endpoint.RequestOverrides, features)
 		if err != nil {
-			route.Release(endpoint.Name)
+			route.ReleaseForClient(endpoint.Name, clientName, maxConcurrencyPerEndpoint)
 			return http.StatusBadRequest, usageInfo{}, 0, endpoint, responseStats{}, err
 		}
 		lastAttemptedEndpoint = endpoint
@@ -221,7 +221,7 @@ func (h *Handler) forwardWithFallback(w http.ResponseWriter, r *http.Request, bo
 		attempts++
 		resp, err := h.forward(w, r, upstreamBody, idleTimeout, totalTimeout, maxResponseBodyBytes, endpoint, upstreamPath, requestStarted)
 		upstreamDuration += time.Since(attemptStarted)
-		route.Release(endpoint.Name)
+		route.ReleaseForClient(endpoint.Name, clientName, maxConcurrencyPerEndpoint)
 		if err != nil {
 			statusCode := 0
 			if resp != nil {
