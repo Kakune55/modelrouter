@@ -46,6 +46,7 @@ type endpointState struct {
 	lastError           string
 	lastErrorAt         time.Time
 	inflight            int
+	inflightByClient    map[string]int
 }
 
 func NewStore(cfg *config.Config) *Store {
@@ -156,11 +157,20 @@ func (r *Route) MarkFailure(endpointName string, statusCode int, err error) {
 }
 
 func (r *Route) TryAcquire(endpointName string) bool {
-	return r.group.tryAcquire(endpointName)
+	return r.group.tryAcquire(endpointName, "", 0)
 }
 
 func (r *Route) Release(endpointName string) {
-	r.group.release(endpointName)
+	r.group.release(endpointName, "", 0)
+
+}
+
+func (r *Route) TryAcquireForClient(endpointName, clientName string, limit int) bool {
+	return r.group.tryAcquire(endpointName, clientName, limit)
+}
+
+func (r *Route) ReleaseForClient(endpointName, clientName string, limit int) {
+	r.group.release(endpointName, clientName, limit)
 }
 
 func (g *GroupRuntime) isCooling(idx int, now time.Time) bool {
@@ -222,28 +232,37 @@ func failureMessage(statusCode int, err error) string {
 	return "upstream request failed"
 }
 
-func (g *GroupRuntime) tryAcquire(endpointName string) bool {
+func (g *GroupRuntime) tryAcquire(endpointName, clientName string, perClientLimit int) bool {
 	idx := g.endpointIndex(endpointName)
 	if idx < 0 {
 		return false
 	}
-	limit := g.endpoints[idx].MaxConcurrency
-	if limit <= 0 {
+	globalLimit := g.endpoints[idx].MaxConcurrency
+	if globalLimit <= 0 && perClientLimit <= 0 {
 		return true
 	}
 	state := &g.endpointState[idx]
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.inflight >= limit {
+	if globalLimit > 0 && state.inflight >= globalLimit {
+		return false
+	}
+	if perClientLimit > 0 && state.inflightByClient[clientName] >= perClientLimit {
 		return false
 	}
 	state.inflight++
+	if perClientLimit > 0 {
+		if state.inflightByClient == nil {
+			state.inflightByClient = make(map[string]int)
+		}
+		state.inflightByClient[clientName]++
+	}
 	return true
 }
 
-func (g *GroupRuntime) release(endpointName string) {
+func (g *GroupRuntime) release(endpointName, clientName string, perClientLimit int) {
 	idx := g.endpointIndex(endpointName)
-	if idx < 0 || g.endpoints[idx].MaxConcurrency <= 0 {
+	if idx < 0 || (g.endpoints[idx].MaxConcurrency <= 0 && perClientLimit <= 0) {
 		return
 	}
 	state := &g.endpointState[idx]
@@ -251,6 +270,14 @@ func (g *GroupRuntime) release(endpointName string) {
 	defer state.mu.Unlock()
 	if state.inflight > 0 {
 		state.inflight--
+	}
+	if perClientLimit <= 0 {
+		return
+	}
+	if inflight := state.inflightByClient[clientName]; inflight > 1 {
+		state.inflightByClient[clientName] = inflight - 1
+	} else {
+		delete(state.inflightByClient, clientName)
 	}
 }
 

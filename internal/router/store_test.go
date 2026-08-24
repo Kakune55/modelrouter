@@ -297,3 +297,83 @@ func TestEndpointMaxConcurrency(t *testing.T) {
 	}
 	route.Release("a")
 }
+
+func TestEndpointMaxConcurrencyPerClient(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{
+			"demo": {RouteGroup: "group"},
+		},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "a", BaseURL: "http://a", MaxConcurrency: 3},
+				},
+			},
+		},
+	})
+
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	for range 2 {
+		if !route.TryAcquireForClient("a", "client-a", 2) {
+			t.Fatal("client-a acquire failed")
+		}
+	}
+	if route.TryAcquireForClient("a", "client-a", 2) {
+		t.Fatal("client-a should be limited")
+	}
+	if !route.TryAcquireForClient("a", "client-b", 2) {
+		t.Fatal("client-b should have its own quota")
+	}
+	if route.TryAcquireForClient("a", "client-b", 2) {
+		t.Fatal("endpoint global limit should apply")
+	}
+
+	route.ReleaseForClient("a", "client-a", 2)
+	if !route.TryAcquireForClient("a", "client-b", 2) {
+		t.Fatal("client-b acquire after release failed")
+	}
+
+	route.ReleaseForClient("a", "client-a", 2)
+	for range 2 {
+		route.ReleaseForClient("a", "client-b", 2)
+	}
+	state := &route.group.endpointState[0]
+	if state.inflight != 0 || len(state.inflightByClient) != 0 {
+		t.Fatalf("endpoint state was not released: %+v", state)
+	}
+}
+
+func TestEndpointMaxConcurrencyPerClientWithoutGlobalLimit(t *testing.T) {
+	store := NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{"demo": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy: config.StrategyFirstAvailable,
+				Endpoints: []config.EndpointConfig{
+					{Name: "a", BaseURL: "http://a"},
+				},
+			},
+		},
+	})
+
+	route, err := store.Get().Pick("demo", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if !route.TryAcquireForClient("a", "client-a", 1) {
+		t.Fatal("first acquire failed")
+	}
+	if route.TryAcquireForClient("a", "client-a", 1) {
+		t.Fatal("second acquire should be limited")
+	}
+	if !route.TryAcquireForClient("a", "client-b", 1) {
+		t.Fatal("client-b should have its own quota")
+	}
+
+	route.ReleaseForClient("a", "client-a", 1)
+	route.ReleaseForClient("a", "client-b", 1)
+}
