@@ -2,11 +2,13 @@ package admin
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 
 	"modelrouter/internal/config"
 	"modelrouter/internal/metrics"
+	"modelrouter/internal/proxy"
 	"modelrouter/internal/router"
 )
 
@@ -333,6 +336,190 @@ func TestClientKeyPermissions(t *testing.T) {
 	if blockedConfigResp.Code != http.StatusForbidden {
 		t.Fatalf("key writer config status = %d body = %s", blockedConfigResp.Code, blockedConfigResp.Body.String())
 	}
+}
+
+func TestIssueClientKey(t *testing.T) {
+	handler, store, configPath := newClientKeyIssuanceHandler(t, true)
+	req := httptest.NewRequest(http.MethodPost, "/admin/client-keys", strings.NewReader(`{"name":"client-b","access_group":"default"}`))
+	req.Header.Set("Authorization", "Bearer key-write-token")
+	resp := httptest.NewRecorder()
+	handler.ClientKeys(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("issue status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	var issued config.ClientKeyConfig
+	if err := json.Unmarshal(resp.Body.Bytes(), &issued); err != nil {
+		t.Fatalf("decode issued key: %v", err)
+	}
+	if issued.Name != "client-b" || issued.AccessGroup != "default" {
+		t.Fatalf("issued key = %+v", issued)
+	}
+	if !strings.HasPrefix(issued.Key, "mr-") {
+		t.Fatalf("issued key prefix = %q", issued.Key)
+	}
+	random, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(issued.Key, "mr-"))
+	if err != nil || len(random) != 32 {
+		t.Fatalf("issued key random part length = %d, error = %v", len(random), err)
+	}
+
+	loaded, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("load persisted config: %v", err)
+	}
+	if !hasClientKey(loaded.Auth.Keys, issued) || !hasClientKey(store.Get().Config.Auth.Keys, issued) {
+		t.Fatalf("issued key was not persisted and activated: %+v", issued)
+	}
+
+	proxyHandler := proxy.NewHandler(store, metrics.NewRecorder())
+	defer proxyHandler.Close()
+	modelsReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	modelsReq.Header.Set("Authorization", "Bearer "+issued.Key)
+	modelsResp := httptest.NewRecorder()
+	proxyHandler.Models(modelsResp, modelsReq)
+	if modelsResp.Code != http.StatusOK {
+		t.Fatalf("issued key authentication status = %d body = %s", modelsResp.Code, modelsResp.Body.String())
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/admin/client-keys/client-b", nil)
+	readReq.Header.Set("Authorization", "Bearer key-read-token")
+	readResp := httptest.NewRecorder()
+	handler.ClientKeys(readResp, readReq)
+	if strings.Contains(readResp.Body.String(), issued.Key) || !strings.Contains(readResp.Body.String(), "********") {
+		t.Fatalf("client key response was not redacted: %s", readResp.Body.String())
+	}
+}
+
+func TestIssueClientKeyValidation(t *testing.T) {
+	handler, _, _ := newClientKeyIssuanceHandler(t, true)
+	tests := []struct {
+		name   string
+		path   string
+		token  string
+		body   string
+		status int
+	}{
+		{name: "名称为空", path: "/admin/client-keys", token: "key-write-token", body: `{"access_group":"default"}`, status: http.StatusBadRequest},
+		{name: "访问组为空", path: "/admin/client-keys", token: "key-write-token", body: `{"name":"client-b"}`, status: http.StatusBadRequest},
+		{name: "访问组不存在", path: "/admin/client-keys", token: "key-write-token", body: `{"name":"client-b","access_group":"missing"}`, status: http.StatusBadRequest},
+		{name: "名称已存在", path: "/admin/client-keys", token: "key-write-token", body: `{"name":"client-a","access_group":"default"}`, status: http.StatusConflict},
+		{name: "单项路径不支持签发", path: "/admin/client-keys/client-b", token: "key-write-token", body: `{"name":"client-b","access_group":"default"}`, status: http.StatusMethodNotAllowed},
+		{name: "读取权限不能签发", path: "/admin/client-keys", token: "key-read-token", body: `{"name":"client-b","access_group":"default"}`, status: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Authorization", "Bearer "+tt.token)
+			resp := httptest.NewRecorder()
+			handler.ClientKeys(resp, req)
+			if resp.Code != tt.status {
+				t.Fatalf("status = %d, want %d, body = %s", resp.Code, tt.status, resp.Body.String())
+			}
+		})
+	}
+}
+
+func TestIssueClientKeyRejectsDisabledAuth(t *testing.T) {
+	handler, _, _ := newClientKeyIssuanceHandler(t, false)
+	req := httptest.NewRequest(http.MethodPost, "/admin/client-keys", strings.NewReader(`{"name":"client-b","access_group":"default"}`))
+	req.Header.Set("Authorization", "Bearer key-write-token")
+	resp := httptest.NewRecorder()
+	handler.ClientKeys(resp, req)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body = %s", resp.Code, http.StatusConflict, resp.Body.String())
+	}
+}
+
+func TestIssueClientKeyRetriesCredentialCollisions(t *testing.T) {
+	handler, _, _ := newClientKeyIssuanceHandler(t, true)
+	generated := []string{"admin-master-token", "client-token-a", "mr-" + strings.Repeat("a", 43)}
+	attempt := 0
+	handler.clientKeyGenerator = func() (string, error) {
+		key := generated[attempt]
+		attempt++
+		return key, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/client-keys", strings.NewReader(`{"name":"client-b","access_group":"default"}`))
+	req.Header.Set("Authorization", "Bearer key-write-token")
+	resp := httptest.NewRecorder()
+	handler.ClientKeys(resp, req)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if attempt != 3 || !strings.Contains(resp.Body.String(), generated[2]) {
+		t.Fatalf("generation attempts = %d body = %s", attempt, resp.Body.String())
+	}
+}
+
+func TestConcurrentIssueClientKeyRejectsDuplicateName(t *testing.T) {
+	handler, store, _ := newClientKeyIssuanceHandler(t, true)
+	start := make(chan struct{})
+	statuses := make(chan int, 2)
+	for range 2 {
+		go func() {
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/admin/client-keys", strings.NewReader(`{"name":"client-b","access_group":"default"}`))
+			req.Header.Set("Authorization", "Bearer key-write-token")
+			resp := httptest.NewRecorder()
+			handler.ClientKeys(resp, req)
+			statuses <- resp.Code
+		}()
+	}
+	close(start)
+
+	created, conflicts := 0, 0
+	for range 2 {
+		switch <-statuses {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+			conflicts++
+		}
+	}
+	if created != 1 || conflicts != 1 {
+		t.Fatalf("created = %d, conflicts = %d", created, conflicts)
+	}
+	if got := len(store.Get().Config.Auth.Keys); got != 2 {
+		t.Fatalf("active client key count = %d, want 2", got)
+	}
+}
+
+func newClientKeyIssuanceHandler(t *testing.T, authEnabled bool) (*Handler, *router.Store, string) {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	store := router.NewStore(&config.Config{
+		Admin: config.AdminConfig{
+			Token: "admin-master-token",
+			Keys: []config.AdminKeyConfig{
+				{Name: "key-reader", Key: "key-read-token", Permissions: []string{config.AdminPermissionClientKeysRead}},
+				{Name: "key-writer", Key: "key-write-token", Permissions: []string{config.AdminPermissionClientKeysWrite}},
+			},
+		},
+		Auth: config.AuthConfig{
+			Enabled: authEnabled,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "client-token-a", AccessGroup: "default"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{"default": {}},
+		Models:       map[string]config.ModelConfig{"model-a": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy:  config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{{Name: "endpoint", BaseURL: "http://127.0.0.1"}},
+			},
+		},
+	})
+	return NewHandler(store, metrics.NewRecorder(), configPath), store, configPath
+}
+
+func hasClientKey(keys []config.ClientKeyConfig, expected config.ClientKeyConfig) bool {
+	return slices.Contains(keys, expected)
 }
 
 func TestClientKeyPermissionHierarchy(t *testing.T) {

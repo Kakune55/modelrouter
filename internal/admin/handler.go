@@ -1,8 +1,11 @@
 package admin
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -32,13 +35,19 @@ type Handler struct {
 	recorder            *metrics.Recorder
 	configPath          string
 	configMu            sync.Mutex
+	clientKeyGenerator  func() (string, error)
 	clientLimitProvider ClientLimitProvider
 	configUpdateHook    func(*config.Config)
 	exporterStatus      MetricsExporterStatusProvider
 }
 
 func NewHandler(store *router.Store, recorder *metrics.Recorder, configPath string) *Handler {
-	return &Handler{store: store, recorder: recorder, configPath: configPath}
+	return &Handler{
+		store:              store,
+		recorder:           recorder,
+		configPath:         configPath,
+		clientKeyGenerator: generateClientKey,
+	}
 }
 
 func (h *Handler) WithClientLimitProvider(provider ClientLimitProvider) *Handler {
@@ -241,6 +250,22 @@ func (h *Handler) ClientKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, keys)
+	case http.MethodPost:
+		if hasName {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var request clientKeyIssueRequest
+		if !decodeAdminJSON(w, r, &request) {
+			return
+		}
+		key, err := h.issueClientKey(request)
+		if err != nil {
+			writeAdminError(w, statusForConfigError(err), err.Error())
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusCreated, key)
 	case http.MethodPut:
 		if !hasName {
 			writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -923,11 +948,20 @@ func (h *Handler) clientLimits() any {
 }
 
 func (h *Handler) updateConfig(mutator func(*config.Config)) error {
+	return h.updateConfigChecked(func(cfg *config.Config) error {
+		mutator(cfg)
+		return nil
+	})
+}
+
+func (h *Handler) updateConfigChecked(mutator func(*config.Config) error) error {
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
 
 	next := cloneConfig(h.store.Get().Config)
-	mutator(next)
+	if err := mutator(next); err != nil {
+		return err
+	}
 	if err := next.Validate(); err != nil {
 		return configUpdateError{status: http.StatusBadRequest, err: err}
 	}
@@ -1019,6 +1053,79 @@ func resourceName(path, prefix string) (string, bool, bool) {
 		return "", false, false
 	}
 	return name, true, true
+}
+
+type clientKeyIssueRequest struct {
+	Name        string `json:"name"`
+	AccessGroup string `json:"access_group"`
+}
+
+func (h *Handler) issueClientKey(request clientKeyIssueRequest) (config.ClientKeyConfig, error) {
+	var issued config.ClientKeyConfig
+	err := h.updateConfigChecked(func(cfg *config.Config) error {
+		if strings.TrimSpace(request.Name) == "" {
+			return configUpdateError{status: http.StatusBadRequest, err: errors.New("name must not be empty")}
+		}
+		if strings.TrimSpace(request.AccessGroup) == "" {
+			return configUpdateError{status: http.StatusBadRequest, err: errors.New("access_group must not be empty")}
+		}
+		if !cfg.Auth.Enabled {
+			return configUpdateError{status: http.StatusConflict, err: errors.New("client authentication is disabled")}
+		}
+		if _, ok := cfg.AccessGroups[request.AccessGroup]; !ok {
+			return configUpdateError{status: http.StatusBadRequest, err: errors.New("access_group not found")}
+		}
+		if clientKeyExists(cfg.Auth.Keys, request.Name) {
+			return configUpdateError{status: http.StatusConflict, err: errors.New("client key already exists")}
+		}
+
+		key, err := h.generateUniqueClientKey(cfg)
+		if err != nil {
+			return configUpdateError{status: http.StatusInternalServerError, err: err}
+		}
+		issued = config.ClientKeyConfig{Name: request.Name, Key: key, AccessGroup: request.AccessGroup}
+		cfg.Auth.Keys = append(cfg.Auth.Keys, issued)
+		return nil
+	})
+	return issued, err
+}
+
+func (h *Handler) generateUniqueClientKey(cfg *config.Config) (string, error) {
+	for range 3 {
+		key, err := h.clientKeyGenerator()
+		if err != nil {
+			return "", fmt.Errorf("generate client key: %w", err)
+		}
+		if !credentialExists(cfg, key) {
+			return key, nil
+		}
+	}
+	return "", errors.New("failed to generate unique client key")
+}
+
+func generateClientKey() (string, error) {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return "mr-" + base64.RawURLEncoding.EncodeToString(random), nil
+}
+
+func credentialExists(cfg *config.Config, candidate string) bool {
+	if cfg.Admin.Token == candidate {
+		return true
+	}
+	for _, key := range cfg.Admin.Keys {
+		if key.Key == candidate {
+			return true
+		}
+	}
+	for _, key := range cfg.Auth.Keys {
+		if key.Key == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func upsertClientKey(keys []config.ClientKeyConfig, key config.ClientKeyConfig) []config.ClientKeyConfig {
