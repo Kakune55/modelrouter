@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"modelrouter/internal/config"
 	"modelrouter/internal/metrics"
@@ -30,6 +31,7 @@ type Handler struct {
 	store               *router.Store
 	recorder            *metrics.Recorder
 	configPath          string
+	configMu            sync.Mutex
 	clientLimitProvider ClientLimitProvider
 	configUpdateHook    func(*config.Config)
 	exporterStatus      MetricsExporterStatusProvider
@@ -77,11 +79,16 @@ func (h *Handler) Config(w http.ResponseWriter, r *http.Request) {
 			writeAdminError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := config.SaveFile(h.configPath, cfg); err != nil {
+		h.configMu.Lock()
+		err = config.SaveFile(h.configPath, cfg)
+		if err == nil {
+			h.applyConfig(cfg)
+		}
+		h.configMu.Unlock()
+		if err != nil {
 			writeAdminError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		h.applyConfig(cfg)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "persisted": "true"})
 	default:
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -341,12 +348,16 @@ func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	h.configMu.Lock()
 	cfg, err := config.LoadFile(h.configPath)
+	if err == nil {
+		h.applyConfig(cfg)
+	}
+	h.configMu.Unlock()
 	if err != nil {
 		writeAdminError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h.applyConfig(cfg)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
@@ -912,6 +923,9 @@ func (h *Handler) clientLimits() any {
 }
 
 func (h *Handler) updateConfig(mutator func(*config.Config)) error {
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+
 	next := cloneConfig(h.store.Get().Config)
 	mutator(next)
 	if err := next.Validate(); err != nil {

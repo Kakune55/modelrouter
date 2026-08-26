@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -443,6 +444,53 @@ func TestAdminResourceConfigAPIs(t *testing.T) {
 	}
 	if cfg.RouteGroups["group"].Endpoints[0].APIKey != "upstream-secret" {
 		t.Fatalf("persisted route group lost api key: %+v", cfg.RouteGroups["group"])
+	}
+}
+
+func TestConcurrentConfigUpdatesPreserveChanges(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	store := router.NewStore(&config.Config{
+		Models: map[string]config.ModelConfig{"model-a": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy:  config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{{Name: "endpoint", BaseURL: "http://127.0.0.1"}},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder(), configPath)
+
+	const updates = 8
+	start := make(chan struct{})
+	errs := make(chan error, updates)
+	for i := range updates {
+		name := "model-" + strconv.Itoa(i)
+		go func() {
+			<-start
+			errs <- handler.updateConfig(func(cfg *config.Config) {
+				// 放大旧实现中读取、修改和写回之间的竞态窗口。
+				time.Sleep(5 * time.Millisecond)
+				cfg.Models[name] = config.ModelConfig{RouteGroup: "group"}
+			})
+		}()
+	}
+	close(start)
+
+	for range updates {
+		if err := <-errs; err != nil {
+			t.Fatalf("updateConfig() error = %v", err)
+		}
+	}
+
+	loaded, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("load persisted config: %v", err)
+	}
+	if got, want := len(loaded.Models), updates+1; got != want {
+		t.Fatalf("persisted model count = %d, want %d", got, want)
+	}
+	if got, want := len(store.Get().Config.Models), updates+1; got != want {
+		t.Fatalf("active model count = %d, want %d", got, want)
 	}
 }
 
