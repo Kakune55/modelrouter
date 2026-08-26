@@ -20,7 +20,8 @@ func TestHandlerServesDocument(t *testing.T) {
 		t.Fatalf("content-type = %s", got)
 	}
 	var doc struct {
-		OpenAPI    string `json:"openapi"`
+		OpenAPI    string                     `json:"openapi"`
+		Paths      map[string]json.RawMessage `json:"paths"`
 		Components struct {
 			Schemas map[string]json.RawMessage `json:"schemas"`
 		} `json:"components"`
@@ -31,10 +32,21 @@ func TestHandlerServesDocument(t *testing.T) {
 	if doc.OpenAPI != "3.1.0" {
 		t.Fatalf("openapi = %s", doc.OpenAPI)
 	}
-	for _, schema := range []string{"InfluxDBConfig", "InfluxDBExporterStatus"} {
+	for _, schema := range []string{"InfluxDBConfig", "InfluxDBExporterStatus", "ClientKeyIssueRequest", "ClientKeyIssueResponse"} {
 		if _, ok := doc.Components.Schemas[schema]; !ok {
 			t.Fatalf("missing schema %q", schema)
 		}
+	}
+	var clientKeysPath struct {
+		Post struct {
+			OperationID string `json:"operationId"`
+		} `json:"post"`
+	}
+	if err := json.Unmarshal(doc.Paths["/admin/client-keys"], &clientKeysPath); err != nil {
+		t.Fatalf("decode client key path: %v", err)
+	}
+	if got := clientKeysPath.Post.OperationID; got != "issueAdminClientKey" {
+		t.Fatalf("client key issue operationId = %q", got)
 	}
 }
 

@@ -21,6 +21,14 @@
           "config:read",
           "config:write"
         ]
+      },
+      {
+        "name": "key-manager",
+        "key": "mr-replace-with-key-manager-token",
+        "permissions": [
+          "client-keys:read",
+          "client-keys:write"
+        ]
       }
     ]
   },
