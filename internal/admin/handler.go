@@ -212,7 +212,7 @@ func (h *Handler) RouteGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ClientKeys(w http.ResponseWriter, r *http.Request) {
-	if !h.authorize(w, r, configPermissionForMethod(r.Method)) {
+	if !h.authorize(w, r, clientKeyPermissionForMethod(r.Method)) {
 		return
 	}
 	name, hasName, ok := resourceName(r.URL.EscapedPath(), "/admin/client-keys")
@@ -559,8 +559,18 @@ func configPermissionForMethod(method string) string {
 	return config.AdminPermissionConfigWrite
 }
 
+func clientKeyPermissionForMethod(method string) string {
+	if method == http.MethodGet {
+		return config.AdminPermissionClientKeysRead
+	}
+	return config.AdminPermissionClientKeysWrite
+}
+
 func adminKeyAllows(key config.AdminKeyConfig, permission string) bool {
 	for _, candidate := range key.Permissions {
+		if candidate == permission {
+			return true
+		}
 		switch candidate {
 		case config.AdminPermissionAll:
 			return true
@@ -572,8 +582,14 @@ func adminKeyAllows(key config.AdminKeyConfig, permission string) bool {
 			if adminWritePermission(permission) {
 				return true
 			}
-		case permission:
-			return true
+		case config.AdminPermissionConfigRead:
+			if permission == config.AdminPermissionClientKeysRead {
+				return true
+			}
+		case config.AdminPermissionConfigWrite:
+			if permission == config.AdminPermissionClientKeysWrite {
+				return true
+			}
 		}
 	}
 	return false
@@ -582,6 +598,7 @@ func adminKeyAllows(key config.AdminKeyConfig, permission string) bool {
 func adminReadPermission(permission string) bool {
 	switch permission {
 	case config.AdminPermissionConfigRead,
+		config.AdminPermissionClientKeysRead,
 		config.AdminPermissionMetricsRead,
 		config.AdminPermissionHealthRead,
 		config.AdminPermissionLimitsRead,
@@ -593,7 +610,8 @@ func adminReadPermission(permission string) bool {
 }
 
 func adminWritePermission(permission string) bool {
-	return permission == config.AdminPermissionConfigWrite
+	return permission == config.AdminPermissionConfigWrite ||
+		permission == config.AdminPermissionClientKeysWrite
 }
 
 func bearerToken(header string) (string, bool) {

@@ -275,6 +275,94 @@ func TestAdminKeyPermissions(t *testing.T) {
 	}
 }
 
+func TestClientKeyPermissions(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	store := router.NewStore(&config.Config{
+		Admin: config.AdminConfig{
+			Keys: []config.AdminKeyConfig{
+				{Name: "key-reader", Key: "key-read-token", Permissions: []string{config.AdminPermissionClientKeysRead}},
+				{Name: "key-writer", Key: "key-write-token", Permissions: []string{config.AdminPermissionClientKeysWrite}},
+			},
+		},
+		Auth: config.AuthConfig{
+			Enabled: true,
+			Keys: []config.ClientKeyConfig{
+				{Name: "client-a", Key: "client-token-a", AccessGroup: "default"},
+			},
+		},
+		AccessGroups: map[string]config.AccessGroupConfig{"default": {}},
+		Models:       map[string]config.ModelConfig{"model-a": {RouteGroup: "group"}},
+		RouteGroups: map[string]config.RouteGroupConfig{
+			"group": {
+				Strategy:  config.StrategyRoundRobin,
+				Endpoints: []config.EndpointConfig{{Name: "endpoint", BaseURL: "http://127.0.0.1"}},
+			},
+		},
+	})
+	handler := NewHandler(store, metrics.NewRecorder(), configPath)
+
+	readReq := httptest.NewRequest(http.MethodGet, "/admin/client-keys", nil)
+	readReq.Header.Set("Authorization", "Bearer key-read-token")
+	readResp := httptest.NewRecorder()
+	handler.ClientKeys(readResp, readReq)
+	if readResp.Code != http.StatusOK {
+		t.Fatalf("read client keys status = %d body = %s", readResp.Code, readResp.Body.String())
+	}
+
+	writeReq := httptest.NewRequest(http.MethodPut, "/admin/client-keys/client-b", strings.NewReader(`{"key":"client-token-b","access_group":"default"}`))
+	writeReq.Header.Set("Authorization", "Bearer key-write-token")
+	writeResp := httptest.NewRecorder()
+	handler.ClientKeys(writeResp, writeReq)
+	if writeResp.Code != http.StatusOK {
+		t.Fatalf("write client key status = %d body = %s", writeResp.Code, writeResp.Body.String())
+	}
+
+	blockedReadReq := httptest.NewRequest(http.MethodGet, "/admin/client-keys", nil)
+	blockedReadReq.Header.Set("Authorization", "Bearer key-write-token")
+	blockedReadResp := httptest.NewRecorder()
+	handler.ClientKeys(blockedReadResp, blockedReadReq)
+	if blockedReadResp.Code != http.StatusForbidden {
+		t.Fatalf("write-only key read status = %d body = %s", blockedReadResp.Code, blockedReadResp.Body.String())
+	}
+
+	blockedConfigReq := httptest.NewRequest(http.MethodPut, "/admin/config", nil)
+	blockedConfigReq.Header.Set("Authorization", "Bearer key-write-token")
+	blockedConfigResp := httptest.NewRecorder()
+	handler.Config(blockedConfigResp, blockedConfigReq)
+	if blockedConfigResp.Code != http.StatusForbidden {
+		t.Fatalf("key writer config status = %d body = %s", blockedConfigResp.Code, blockedConfigResp.Body.String())
+	}
+}
+
+func TestClientKeyPermissionHierarchy(t *testing.T) {
+	tests := []struct {
+		name        string
+		permissions []string
+		required    string
+		allowed     bool
+	}{
+		{name: "精确读取权限", permissions: []string{config.AdminPermissionClientKeysRead}, required: config.AdminPermissionClientKeysRead, allowed: true},
+		{name: "读取权限不能写入", permissions: []string{config.AdminPermissionClientKeysRead}, required: config.AdminPermissionClientKeysWrite},
+		{name: "精确写入权限", permissions: []string{config.AdminPermissionClientKeysWrite}, required: config.AdminPermissionClientKeysWrite, allowed: true},
+		{name: "写入权限不能读取", permissions: []string{config.AdminPermissionClientKeysWrite}, required: config.AdminPermissionClientKeysRead},
+		{name: "配置读取保持兼容", permissions: []string{config.AdminPermissionConfigRead}, required: config.AdminPermissionClientKeysRead, allowed: true},
+		{name: "配置写入保持兼容", permissions: []string{config.AdminPermissionConfigWrite}, required: config.AdminPermissionClientKeysWrite, allowed: true},
+		{name: "管理读取继承", permissions: []string{config.AdminPermissionRead}, required: config.AdminPermissionClientKeysRead, allowed: true},
+		{name: "管理写入继承", permissions: []string{config.AdminPermissionWrite}, required: config.AdminPermissionClientKeysWrite, allowed: true},
+		{name: "管理全部权限", permissions: []string{config.AdminPermissionAll}, required: config.AdminPermissionClientKeysWrite, allowed: true},
+		{name: "Key 写入", permissions: []string{config.AdminPermissionClientKeysWrite}, required: config.AdminPermissionConfigWrite},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := config.AdminKeyConfig{Permissions: tt.permissions}
+			if got := adminKeyAllows(key, tt.required); got != tt.allowed {
+				t.Fatalf("adminKeyAllows() = %v, want %v", got, tt.allowed)
+			}
+		})
+	}
+}
+
 func TestAdminResourceConfigAPIs(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	store := router.NewStore(&config.Config{
