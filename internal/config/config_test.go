@@ -31,7 +31,15 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 	cfg := &Config{
 		Admin: AdminConfig{
 			Keys: []AdminKeyConfig{
-				{Name: "dashboard", Key: "admin-read-token", Permissions: []string{AdminPermissionRead}},
+				{
+					Name: "dashboard",
+					Key:  "admin-read-token",
+					Permissions: []string{
+						AdminPermissionRead,
+						AdminPermissionClientKeysRead,
+						AdminPermissionClientKeysWrite,
+					},
+				},
 			},
 		},
 		Models: map[string]ModelConfig{

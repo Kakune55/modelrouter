@@ -576,7 +576,7 @@
           "Admin"
         ],
         "summary": "List client keys",
-        "description": "Requires config:read or admin:read. Client key values are redacted.",
+        "description": "Requires client-keys:read, config:read, or admin:read. Client key values are redacted.",
         "operationId": "listAdminClientKeys",
         "security": [
           {
@@ -604,6 +604,62 @@
             "$ref": "#/components/responses/AdminForbidden"
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Issue client key",
+        "description": "Requires client-keys:write, config:write, or admin:write. Generates a client API key with the mr- prefix and 32 cryptographically secure random bytes encoded as unpadded Base64URL. The plaintext key is returned only in the successful response.",
+        "operationId": "issueAdminClientKey",
+        "security": [
+          {
+            "AdminBearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientKeyIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Client key created, persisted, and activated.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents caches from storing the plaintext key response.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientKeyIssueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/AdminError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdminForbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/AdminError"
+          }
+        }
       }
     },
     "/admin/client-keys/{name}": {
@@ -617,7 +673,7 @@
           "Admin"
         ],
         "summary": "Get client key",
-        "description": "Requires config:read or admin:read. Client key values are redacted.",
+        "description": "Requires client-keys:read, config:read, or admin:read. Client key values are redacted.",
         "operationId": "getAdminClientKey",
         "security": [
           {
@@ -651,7 +707,7 @@
           "Admin"
         ],
         "summary": "Create or replace client key",
-        "description": "Requires config:write or admin:write. The key name comes from the path.",
+        "description": "Requires client-keys:write, config:write, or admin:write. The key name comes from the path.",
         "operationId": "upsertAdminClientKey",
         "security": [
           {
@@ -688,7 +744,7 @@
           "Admin"
         ],
         "summary": "Delete client key",
-        "description": "Requires config:write or admin:write.",
+        "description": "Requires client-keys:write, config:write, or admin:write.",
         "operationId": "deleteAdminClientKey",
         "security": [
           {
@@ -1956,6 +2012,8 @@
                 "admin:write",
                 "config:read",
                 "config:write",
+                "client-keys:read",
+                "client-keys:write",
                 "metrics:read",
                 "health:read",
                 "limits:read"
@@ -2145,7 +2203,48 @@
             "type": "string"
           },
           "key": {
+            "type": "string",
+            "description": "Client bearer token. Redacted as ******** in Admin GET responses."
+          },
+          "access_group": {
             "type": "string"
+          }
+        }
+      },
+      "ClientKeyIssueRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "access_group"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique client name used by metrics and rate limits."
+          },
+          "access_group": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Existing access group assigned to the new key."
+          }
+        }
+      },
+      "ClientKeyIssueResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "key",
+          "access_group"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string",
+            "pattern": "^mr-[A-Za-z0-9_-]{43}$",
+            "description": "New client bearer token. Returned in plaintext only in this response."
           },
           "access_group": {
             "type": "string"

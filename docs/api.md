@@ -14,7 +14,7 @@
 
 ### Admin 接口
 
-`admin:*` 可以访问所有 Admin 接口。表中列出的是更小粒度的权限；`admin:read` 可以访问所有只读接口，`admin:write` 可以访问配置写入接口。
+`admin:*` 可以访问所有 Admin 接口。表中列出的是更小粒度的权限；`admin:read` 可以访问所有只读接口，`admin:write` 可以访问配置和客户端 Key 写入接口。为保持兼容，`config:read`、`config:write` 仍分别包含客户端 Key 的读、写权限。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -28,10 +28,11 @@
 | `GET` | `/admin/route-groups/{name}` | `config:read` | 获取指定路由组 |
 | `PUT` | `/admin/route-groups/{name}` | `config:write` | 新增或替换路由组及其 endpoints |
 | `DELETE` | `/admin/route-groups/{name}` | `config:write` | 删除未被模型引用的路由组 |
-| `GET` | `/admin/client-keys` | `config:read` | 获取客户端 key 列表，key 值脱敏 |
-| `GET` | `/admin/client-keys/{name}` | `config:read` | 获取指定客户端 key |
-| `PUT` | `/admin/client-keys/{name}` | `config:write` | 新增或替换客户端 key |
-| `DELETE` | `/admin/client-keys/{name}` | `config:write` | 删除客户端 key |
+| `GET` | `/admin/client-keys` | `client-keys:read` | 获取客户端 Key 列表，Key 值脱敏 |
+| `POST` | `/admin/client-keys` | `client-keys:write` | 安全随机签发客户端 Key |
+| `GET` | `/admin/client-keys/{name}` | `client-keys:read` | 获取指定客户端 Key，Key 值脱敏 |
+| `PUT` | `/admin/client-keys/{name}` | `client-keys:write` | 新增或替换客户端 Key |
+| `DELETE` | `/admin/client-keys/{name}` | `client-keys:write` | 删除客户端 Key |
 | `GET` | `/admin/access-groups` | `config:read` | 获取访问组列表 |
 | `GET` | `/admin/access-groups/{name}` | `config:read` | 获取指定访问组 |
 | `PUT` | `/admin/access-groups/{name}` | `config:write` | 新增或替换访问组 |
@@ -111,9 +112,11 @@ Admin API 支持两种鉴权方式：
 
 - `admin:*`：全权限。
 - `admin:read`：所有只读接口。
-- `admin:write`：配置更新和 reload。
-- `config:read`：配置读取接口。
-- `config:write`：配置写入和 reload 接口。
+- `admin:write`：配置更新、客户端 Key 写入和 reload。
+- `config:read`：配置读取接口；为保持兼容，也可以读取客户端 Key。
+- `config:write`：配置写入和 reload 接口；为保持兼容，也可以写入客户端 Key。
+- `client-keys:read`：读取客户端 Key，Key 值始终脱敏。
+- `client-keys:write`：签发、新增、替换和删除客户端 Key，不允许修改访问组或其他配置。
 - `metrics:read`：`/admin/metrics*` 和 `/metrics`。
 - `health:read`：`/admin/health`。
 - `limits:read`：`/admin/limits`。
@@ -158,7 +161,7 @@ curl.exe -X POST http://localhost:8080/admin/reload `
 - `/admin/client-keys`、`/admin/client-keys/{name}`
 - `/admin/access-groups`、`/admin/access-groups/{name}`
 
-集合和单项资源支持 `GET`，单项资源支持 `PUT` 和 `DELETE`。写入时会基于当前配置生成新配置，完整校验并写回配置文件，然后热更新内存配置。
+集合和单项资源支持 `GET`，单项资源支持 `PUT` 和 `DELETE`；客户端 Key 集合额外支持 `POST` 签发。写入时会基于当前配置生成新配置，完整校验并写回配置文件，然后热更新内存配置。
 
 资源名称包含特殊字符时需要进行 URL encode。读取 route group 和客户端 key 时，敏感字段会被脱敏。
 
@@ -179,6 +182,27 @@ curl.exe -X PUT http://localhost:8080/admin/client-keys/app-a `
   -H "Content-Type: application/json" `
   -d "{\"key\":\"mr-app-a-token\",\"access_group\":\"default-access\"}"
 ```
+
+推荐通过服务端安全随机签发客户端 Key：
+
+```powershell
+curl.exe -X POST http://localhost:8080/admin/client-keys `
+  -H "Authorization: Bearer mr-replace-with-key-manager-token" `
+  -H "Content-Type: application/json" `
+  -d "{\"name\":\"app-a\",\"access_group\":\"default-access\"}"
+```
+
+成功时返回 `201 Created`：
+
+```json
+{
+  "name": "app-a",
+  "key": "mr-xP7Jk0eU3wQ...",
+  "access_group": "default-access"
+}
+```
+
+Key 使用 `mr-` 前缀和 32 字节安全随机内容的 Base64URL 编码。明文 Key 只在签发成功响应中返回；后续查询仅返回 `********`，响应同时携带 `Cache-Control: no-store`。名称重复或客户端鉴权未启用时返回 `409`，访问组不存在时返回 `400`。`client-keys:write` 可以选择任意已经存在的访问组，但不能创建或修改访问组。
 
 ### 状态接口
 

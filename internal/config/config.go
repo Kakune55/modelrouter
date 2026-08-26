@@ -19,14 +19,16 @@ const (
 	StrategyIPHash             = "ip_hash"
 	StrategyFirstAvailable     = "first_available"
 
-	AdminPermissionAll         = "admin:*"
-	AdminPermissionRead        = "admin:read"
-	AdminPermissionWrite       = "admin:write"
-	AdminPermissionConfigRead  = "config:read"
-	AdminPermissionConfigWrite = "config:write"
-	AdminPermissionMetricsRead = "metrics:read"
-	AdminPermissionHealthRead  = "health:read"
-	AdminPermissionLimitsRead  = "limits:read"
+	AdminPermissionAll             = "admin:*"
+	AdminPermissionRead            = "admin:read"
+	AdminPermissionWrite           = "admin:write"
+	AdminPermissionConfigRead      = "config:read"
+	AdminPermissionConfigWrite     = "config:write"
+	AdminPermissionClientKeysRead  = "client-keys:read"
+	AdminPermissionClientKeysWrite = "client-keys:write"
+	AdminPermissionMetricsRead     = "metrics:read"
+	AdminPermissionHealthRead      = "health:read"
+	AdminPermissionLimitsRead      = "limits:read"
 )
 
 type Config struct {
@@ -472,6 +474,8 @@ func validAdminPermission(permission string) bool {
 		AdminPermissionWrite,
 		AdminPermissionConfigRead,
 		AdminPermissionConfigWrite,
+		AdminPermissionClientKeysRead,
+		AdminPermissionClientKeysWrite,
 		AdminPermissionMetricsRead,
 		AdminPermissionHealthRead,
 		AdminPermissionLimitsRead:
